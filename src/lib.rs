@@ -1,0 +1,17 @@
+//! runcard turns a GPX track into a poster-style PNG card: one coloured stripe
+//! per kilometre, the runner's name, the route outline and the race stats.
+
+pub mod card;
+pub mod error;
+pub mod format;
+pub mod geo;
+pub mod gpx;
+pub mod model;
+pub mod palette;
+pub mod render;
+pub mod route;
+pub mod splits;
+pub mod text;
+
+pub use error::Error;
+pub use model::*;
