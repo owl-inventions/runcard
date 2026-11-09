@@ -4,6 +4,7 @@
 mod common;
 
 use runcard::pipeline::{CardRequest, Pipeline};
+use runcard::text::Role;
 use runcard::{gpx, splits, Theme, Variant};
 use time::macros::datetime;
 use time::OffsetDateTime;
@@ -96,7 +97,7 @@ fn rgb_of(hex: &str) -> [u8; 3] {
 /// The markup before the legend: the visualisation (twice on dark paper),
 /// without the route preview the frame draws after the legend.
 fn picture(svg: &str) -> &str {
-    &svg[..svg.find(">slower</text>").expect("the legend")]
+    &svg[..svg.find(">SLOWER</text>").expect("the legend")]
 }
 
 /// The ribbon's bars: rounded rects from x 88 (the legend has a plain one there).
@@ -141,8 +142,12 @@ fn each_variant_renders_in_light_and_dark_at_the_card_size_without_template_synt
             let svg = &rendered.svg;
             assert!(svg.starts_with("<svg"), "{what}: {svg}");
             assert!(!svg.contains("{{") && !svg.contains("{%"), "{what}: {svg}");
-            // Only the frame's glow filter: no id inside the doubled picture.
-            assert_eq!(svg.matches(" id=").count(), copies(theme) - 1, "{what}");
+            // Only the frame's two glow filters: no id inside the doubled picture.
+            assert_eq!(
+                svg.matches(" id=").count(),
+                2 * (copies(theme) - 1),
+                "{what}"
+            );
             assert_eq!(
                 svg.contains("feGaussianBlur"),
                 theme == Theme::Dark,
@@ -155,12 +160,13 @@ fn each_variant_renders_in_light_and_dark_at_the_card_size_without_template_synt
 }
 
 #[test]
-fn ribbon_draws_a_bar_and_a_number_per_kilometre_and_outlines_the_fastest() {
+fn ribbon_draws_a_bar_and_a_number_per_kilometre_and_marks_the_fastest_with_its_pace() {
     let xml = ten_k();
     assert_eq!(split_count(&xml), 11);
     for theme in Theme::ALL {
         let svg = svg_of(&xml, Variant::Ribbon, theme);
         let copies = copies(theme);
+        let tokens = theme.tokens();
         assert_eq!(bars(&svg), 11 * copies, "{theme}");
         assert_eq!(
             svg.matches(r#"<text x="76" "#).count(),
@@ -168,14 +174,23 @@ fn ribbon_draws_a_bar_and_a_number_per_kilometre_and_outlines_the_fastest() {
             "{theme}"
         );
         assert_eq!(svg.matches(r#"opacity="0.6""#).count(), copies, "{theme}");
-        let outline = format!(
-            r#"fill="none" stroke="{}" stroke-width="2""#,
-            theme.tokens().ink
-        );
+        let outline = format!(r#"fill="none" stroke="{}" stroke-width="2""#, tokens.marker);
         assert_eq!(svg.matches(&outline).count(), copies, "{theme}: {svg}");
-        // Ten kilometres of 18 px rows and 4 px gaps from the top of the zone.
-        assert!(svg.contains(r#"y="160" width="#), "{svg}");
-        assert!(svg.contains(r#"y="380" width="#), "{svg}");
+        // Km 7's pace inside the right end of its bar, which reaches x 672.
+        let pace = format!(
+            r#"<text x="662" y="{}" text-anchor="end" {} font-size="12" fill="{}">4:30</text>"#,
+            200.0 + 22.0 * 6.0 + 9.0 + 4.5,
+            Role::Mono.attributes(),
+            tokens.on_fast
+        );
+        assert_eq!(
+            picture(&svg).matches(&pace).count(),
+            copies,
+            "{theme}: {svg}"
+        );
+        // Eleven rows of 18 px and 4 px gaps from the top of the zone.
+        assert!(svg.contains(r#"y="200" width="#), "{svg}");
+        assert!(svg.contains(r#"y="420" width="#), "{svg}");
         assert!(svg.contains(r#">11</text>"#), "{svg}");
     }
 }
@@ -196,6 +211,7 @@ fn wave_draws_a_section_into_every_kilometre_after_the_first_over_its_fill() {
     for theme in Theme::ALL {
         let svg = svg_of(&xml, Variant::Wave, theme);
         let copies = copies(theme);
+        let marker = theme.tokens().marker;
         // Eleven points, ten sections between them, and the fill.
         let sections = r#"stroke-width="4" stroke-linecap="round""#;
         assert_eq!(svg.matches(sections).count(), 10 * copies, "{theme}: {svg}");
@@ -206,28 +222,61 @@ fn wave_draws_a_section_into_every_kilometre_after_the_first_over_its_fill() {
         );
         let fill = format!(r#"fill="{}" opacity="0.06""#, theme.tokens().ink);
         assert_eq!(svg.matches(&fill).count(), copies, "{theme}: {svg}");
-        assert_eq!(svg.matches(r#" 700Z""#).count(), copies, "{theme}: {svg}");
+        assert_eq!(svg.matches(r#" 704Z""#).count(), copies, "{theme}: {svg}");
         assert_eq!(
             svg.matches(r#"stroke-dasharray="4 4""#).count(),
             copies,
             "{theme}"
         );
         assert_eq!(svg.matches(">average</text>").count(), copies, "{theme}");
-        assert_eq!(svg.matches(r#" r="5""#).count(), copies, "{theme}");
+        // Km 7's dot at the fast anchor in the marker colour, its pace centred
+        // 12 px above it.
+        let dot = format!(r#" cy="240" r="5" fill="{marker}"/>"#);
+        assert_eq!(svg.matches(&dot).count(), copies, "{theme}: {svg}");
+        let pace = format!(
+            r#" y="228" text-anchor="middle" {} font-size="12" fill="{marker}">4:30</text>"#,
+            Role::Mono.attributes()
+        );
+        assert_eq!(
+            picture(&svg).matches(&pace).count(),
+            copies,
+            "{theme}: {svg}"
+        );
     }
 }
 
 #[test]
-fn ledger_sets_a_row_per_kilometre_its_fastest_pace_bold() {
+fn ledger_sets_a_row_per_kilometre_its_fastest_in_the_marker_colour_and_bold() {
     let xml = ten_k();
     for theme in Theme::ALL {
         let svg = svg_of(&xml, Variant::Ledger, theme);
         let copies = copies(theme);
+        let tokens = theme.tokens();
         let paces = paces(&svg);
         assert_eq!(paces.len(), 11 * copies, "{theme}: {svg}");
-        // Every pace in ink; the kilometre colours only in the swatches.
-        let ink = theme.tokens().ink;
-        assert!(paces.iter().all(|pace| fill(pace) == ink), "{theme}: {svg}");
+        // Every pace in ink but km 7's in the marker colour; the kilometre
+        // colours only in the swatches.
+        for pace in &paces {
+            let expected = if pace.contains(">4:30</text>") {
+                tokens.marker
+            } else {
+                tokens.ink
+            };
+            assert_eq!(fill(pace), expected, "{theme}: {pace}");
+        }
+        let number = format!(
+            r#"{} font-size="13" fill="{}">7</text>"#,
+            Role::Mono.attributes(),
+            tokens.marker
+        );
+        assert_eq!(svg.matches(&number).count(), copies, "{theme}: {svg}");
+        let muted = format!(r#"fill="{}">"#, tokens.muted);
+        let numbers = svg.matches(&format!(r#"font-size="13" {muted}"#)).count();
+        assert_eq!(
+            numbers,
+            10 * copies,
+            "{theme}: the other kilometres' numbers"
+        );
         let swatches = swatches(&svg);
         assert_eq!(swatches.len(), 11 * copies, "{theme}: {svg}");
         for pace in &paces {
@@ -247,7 +296,11 @@ fn ledger_sets_a_row_per_kilometre_its_fastest_pace_bold() {
             copies,
             "{theme}"
         );
-        assert_eq!(svg.matches(">4:30</text>").count(), copies, "{theme}");
+        assert_eq!(
+            picture(&svg).matches(">4:30</text>").count(),
+            copies,
+            "{theme}"
+        );
         assert_eq!(svg.matches(">0.46 km</text>").count(), copies, "{theme}");
         // One column: a rule under every row but the last, and the footer's.
         let rules = format!(r#"height="1" fill="{}""#, theme.tokens().rule);
@@ -261,13 +314,17 @@ fn ledger_spreads_a_half_over_two_columns() {
     assert_eq!(split_count(&xml), 22);
     let svg = svg_of(&xml, Variant::Ledger, Theme::Light);
     // Eleven rows in each column: the first from x 48 to 348, the second
-    // from x 372 to 672.
-    let numbers = format!(
-        r#"{} font-size="13" fill="{}""#,
-        runcard::text::Role::Mono.attributes(),
-        Theme::Light.tokens().muted
-    );
-    assert_eq!(svg.matches(&numbers).count(), 22, "{svg}");
+    // from x 372 to 672. Every number muted but the fastest kilometre's.
+    let tokens = Theme::Light.tokens();
+    let numbers = |fill: &str| {
+        let number = format!(
+            r#"{} font-size="13" fill="{fill}""#,
+            Role::Mono.attributes()
+        );
+        svg.matches(&number).count()
+    };
+    assert_eq!(numbers(tokens.muted), 21, "{svg}");
+    assert_eq!(numbers(tokens.marker), 1, "{svg}");
     assert_eq!(svg.matches(r#"<text x="372" "#).count(), 11, "{svg}");
     assert_eq!(svg.matches(r#"<text x="348" "#).count(), 11, "{svg}");
     assert_eq!(swatches(&svg).len(), 22, "{svg}");
@@ -304,7 +361,7 @@ fn a_single_split_is_one_bar_one_level_line_and_one_row() {
 }
 
 #[test]
-fn on_light_paper_nothing_is_drawn_between_the_title_block_the_zone_and_the_legend() {
+fn on_light_paper_each_picture_draws_only_inside_its_zone() {
     let pipeline = Pipeline::new().unwrap();
     let paper = rgb_of(Theme::Light.tokens().paper);
     for xml in [ten_k(), half(), marathon()] {
@@ -317,15 +374,19 @@ fn on_light_paper_nothing_is_drawn_between_the_title_block_the_zone_and_the_lege
                 let i = ((y * width + x) * 3) as usize;
                 [rgb[i], rgb[i + 1], rgb[i + 2]]
             };
-            // Under the subline down to the zone, and under the zone down to
-            // the legend, left of the route preview, which inks at most x
-            // 469.5 to 674.5 and y 731.5 to 792.5 with its start marker.
-            for y in (124..158).chain(722..756) {
-                let columns = if y < 731 { 0..720 } else { 0..469 };
-                for x in columns {
+            // Under the subline down to the zone at 200; under the zone down
+            // to the rule at 740, and from the rule down to the route
+            // preview, whose start marker inks from y 747.5.
+            for y in (178..200).chain(724..740).chain(741..747) {
+                for x in 0..720 {
                     assert_eq!(pixel(x, y), paper, "{variant}: ink at ({x}, {y})");
                 }
             }
+            let inked = (200..724)
+                .flat_map(|y| (0..720).map(move |x| (x, y)))
+                .filter(|&(x, y)| pixel(x, y) != paper)
+                .count();
+            assert!(inked > 2000, "{variant} draws {inked} px in the zone");
         }
     }
 }

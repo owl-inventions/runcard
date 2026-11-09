@@ -7,7 +7,12 @@ pub const DOT: &str = " \u{b7} ";
 
 /// Distance in kilometres with two decimals: `21.46 km`.
 pub fn distance(m: f64) -> String {
-    format!("{:.2} km", m / 1000.0)
+    format!("{} km", kilometres(m))
+}
+
+/// Distance in kilometres with two decimals, without the unit: `21.46`.
+pub fn kilometres(m: f64) -> String {
+    format!("{:.2}", m / 1000.0)
 }
 
 /// Duration rounded to whole seconds: `3:58:41`, `59:59` or `0:05`.
@@ -36,9 +41,9 @@ pub fn date(d: Date) -> String {
     format!("{} {} {}", d.day(), d.month(), d.year())
 }
 
-/// The fastest kilometre and its pace: `km 11 · 5:02`.
-pub fn fastest(index: u32, s_per_km: f64) -> String {
-    format!("km {index}{DOT}{}", pace_short(s_per_km))
+/// The label of the fastest kilometre: `fastest km 11`.
+pub fn fastest_km(index: u32) -> String {
+    format!("fastest km {index}")
 }
 
 fn whole_seconds(s: f64) -> u64 {
@@ -102,8 +107,14 @@ mod tests {
     }
 
     #[test]
-    fn fastest_names_the_kilometre_and_its_bare_pace() {
-        assert_eq!(fastest(11, 302.0), "km 11 \u{b7} 5:02");
-        assert_eq!(fastest(1, 359.6), "km 1 \u{b7} 6:00");
+    fn kilometres_is_the_distance_without_the_unit() {
+        assert_eq!(kilometres(21_096.4), "21.10");
+        assert_eq!(kilometres(600.0), "0.60");
+    }
+
+    #[test]
+    fn fastest_km_names_the_kilometre() {
+        assert_eq!(fastest_km(11), "fastest km 11");
+        assert_eq!(fastest_km(1), "fastest km 1");
     }
 }

@@ -40,7 +40,7 @@ struct Args {
     #[arg(long, value_name = "F", default_value_t = 2.0, value_parser = parse_scale)]
     scale: f32,
     /// The card look.
-    #[arg(long, value_name = "NAME", default_value = "ribbon", value_parser = variant_parser())]
+    #[arg(long, value_name = "NAME", default_value_t = Variant::default(), value_parser = variant_parser())]
     variant: Variant,
     /// The paper and ink.
     #[arg(long, value_name = "THEME", default_value = "light", value_parser = theme_parser())]

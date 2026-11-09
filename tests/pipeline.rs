@@ -70,7 +70,7 @@ fn the_svg_shows_the_runner_event_city_and_date_of_the_request() {
         .unwrap();
     assert!(svg.contains(">Mara Lindqvist</text>"), "{svg}");
     assert!(svg.contains(">Spreelauf</text>"), "{svg}");
-    assert!(svg.contains(">Lisbon \u{b7} 3 May 2026</text>"), "{svg}");
+    assert!(svg.contains(">LISBON \u{b7} 3 MAY 2026</text>"), "{svg}");
 }
 
 #[test]
@@ -79,8 +79,9 @@ fn without_event_and_date_the_card_takes_the_track_name_and_start_date() {
         .unwrap()
         .svg(ten_k().as_bytes(), &request())
         .unwrap();
-    assert!(svg.contains(">Harbour Half</text>"), "{svg}");
-    assert!(svg.contains(">27 September 2026</text>"), "{svg}");
+    assert!(svg.contains(">Harbour <tspan"), "{svg}");
+    assert!(svg.contains(">Half</tspan></text>"), "{svg}");
+    assert!(svg.contains(">27 SEPTEMBER 2026</text>"), "{svg}");
 }
 
 #[test]
@@ -146,24 +147,34 @@ fn example(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-#[test]
-fn the_default_request_renders_the_ribbon_sample_card_unchanged() {
-    let gpx = std::fs::read(example("sample.gpx")).unwrap();
-    let req = CardRequest {
+/// The sample with its city, as the README renders it.
+fn sample_request() -> CardRequest {
+    CardRequest {
         city: Some("Lisbon".into()),
         ..request()
-    };
+    }
+}
+
+#[test]
+fn the_default_request_is_the_spiral_on_light_paper() {
+    let gpx = std::fs::read(example("sample.gpx")).unwrap();
     let pipeline = Pipeline::new().unwrap();
-    let ribbon_light = CardRequest {
-        variant: Variant::Ribbon,
+    let spiral_light = CardRequest {
+        variant: Variant::Spiral,
         theme: Theme::Light,
-        ..req.clone()
+        ..sample_request()
     };
     assert_eq!(
-        pipeline.svg(&gpx[..], &req).unwrap(),
-        pipeline.svg(&gpx[..], &ribbon_light).unwrap()
+        pipeline.svg(&gpx[..], &sample_request()).unwrap(),
+        pipeline.svg(&gpx[..], &spiral_light).unwrap()
     );
+}
 
+#[test]
+fn the_default_request_renders_the_sample_card_unchanged() {
+    let gpx = std::fs::read(example("sample.gpx")).unwrap();
+    let req = sample_request();
+    let pipeline = Pipeline::new().unwrap();
     let (width, height, actual) = decode(&pipeline.png(&gpx[..], &req).unwrap());
     let (_, _, expected) = decode(&std::fs::read(example("sample.png")).unwrap());
     assert_eq!((width, height), (1440, 2000));
@@ -247,7 +258,7 @@ fn every_variant_but_trail_draws_the_route_preview_once_after_the_legend_in_both
             );
             let start = format!(r#" r="2.5" fill="{ink}"/>"#);
             // After the legend, so outside the visualisation the glow repeats.
-            let legend = svg.find(">faster</text>").unwrap();
+            let legend = svg.find(">FASTER</text>").unwrap();
             for tag in [&path, &start] {
                 assert_eq!(svg.matches(tag.as_str()).count(), expected, "{what}: {tag}");
                 if let Some(at) = svg.find(tag.as_str()) {

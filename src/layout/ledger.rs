@@ -14,9 +14,10 @@ use crate::text::{Role, TextMeasure};
 /// Left edge of the table, the content box's.
 const LEFT: f32 = 48.0;
 /// Top of the visualisation zone, where the first row starts.
-const ZONE_TOP: f32 = 160.0;
-/// Height of the visualisation zone, which the longest column never leaves.
-const ZONE_HEIGHT: f32 = 560.0;
+const ZONE_TOP: f32 = 200.0;
+/// Height of the visualisation zone, which the longest column never leaves:
+/// it ends at y 724 at most.
+const ZONE_HEIGHT: f32 = 524.0;
 /// The tallest row: a short column keeps it and leaves the zone's rest empty.
 const MAX_ROW: f32 = 36.0;
 /// A column takes this many rows before the table gets another column.
@@ -32,9 +33,6 @@ const FIGURE_HEIGHT: f32 = 0.73 * FIGURE_SIZE;
 const NOTE_GAP: f32 = 8.0;
 /// Thickness of the rule under a row.
 const RULE: f32 = 1.0;
-/// `wght` of the paces, and of the fastest kilometre's.
-const REGULAR: u16 = 500;
-const BOLD: u16 = 700;
 /// Side of the square swatch left of a pace.
 const SWATCH: f32 = 10.0;
 /// Space between the swatch and the pace's first figure.
@@ -75,12 +73,14 @@ pub struct Row {
     pub right: f32,
     /// Baseline of the figures.
     pub baseline: f32,
-    /// Pace without the unit, e.g. `5:02`, set in `ink`.
+    /// Pace without the unit, e.g. `5:02`, set in `ink` unless the row is
+    /// the fastest.
     pub pace: String,
     /// CSS colour of the kilometre, filling its swatch.
     pub color: String,
-    /// `wght` of the pace: 700 for the fastest kilometre, else 500.
-    pub weight: u16,
+    /// The fastest full kilometre: its number and pace in the marker colour,
+    /// the pace bold.
+    pub fastest: bool,
     /// The square in the kilometre's colour before the pace.
     pub swatch: Swatch,
     /// The partial kilometre's distance, `None` for a full one.
@@ -115,6 +115,7 @@ pub struct Ledger {
 /// of the content box with 24 px gutters between them. Rows are 36 px, less
 /// only when the longest column would not fit the zone. Every pace ends at
 /// its column's right edge, a 10 px swatch 12 px before its first figure.
+/// The fastest full kilometre's row is marked.
 pub fn build(
     analysis: &Analysis,
     splits: &[SplitView],
@@ -152,11 +153,7 @@ pub fn build(
             baseline,
             pace: view.pace.clone(),
             color: view.color.clone(),
-            weight: if analysis.fastest == Some(view.index) {
-                BOLD
-            } else {
-                REGULAR
-            },
+            fastest: analysis.fastest == Some(view.index),
             swatch: Swatch {
                 x: right - pace - SWATCH_GAP - SWATCH,
                 y: baseline - SWATCH_RISE,
@@ -203,7 +200,7 @@ impl Ledger {
                     baseline => px(row.baseline),
                     pace => &row.pace,
                     color => &row.color,
-                    weight => row.weight,
+                    fastest => row.fastest,
                     swatch => context! {
                         x => px(row.swatch.x),
                         y => px(row.swatch.y),
@@ -335,13 +332,37 @@ mod tests {
 
     #[test]
     fn rows_are_36_px_unless_the_longest_column_needs_less_to_fit_the_zone() {
-        // Up to 60 splits in four columns of 15 rows of 36 px.
-        for n in [1, 10, 14, 22, 43, 60] {
+        // Up to 56 splits in four columns of 14 rows of 36 px.
+        for n in [1, 10, 14, 22, 43, 56] {
             assert_near(row_height(n), 36.0, &format!("{n} splits"));
         }
-        // 61 splits in four columns of 16 rows; 100 in four of 25.
-        assert_near(row_height(61), 35.0, "61 splits");
-        assert_near(row_height(100), 22.4, "100 splits");
+        // 57 splits in four columns of 15 rows; 100 in four of 25.
+        assert_near(row_height(57), 524.0 / 15.0, "57 splits");
+        assert_near(row_height(100), 20.96, "100 splits");
+    }
+
+    #[test]
+    fn every_row_and_rule_stays_inside_the_zone() {
+        for n in [1, 14, 22, 43, 56, 57, 100] {
+            let ledger = ledger_of(&run(n, 0.0));
+            let per_column = n.div_ceil(ledger.columns as u32) as f32;
+            assert!(per_column * ledger.row_height <= 524.0 + 1e-3, "{n} splits");
+            for row in &ledger.rows {
+                let what = format!("km {} of {n}", row.index);
+                let top = row.baseline - ledger.row_height / 2.0 - 0.73 * 13.0 / 2.0;
+                assert!(top >= 200.0 - 1e-3, "{what}: row from y {top}");
+                let bottom = top + ledger.row_height;
+                assert!(bottom <= 724.0 + 1e-3, "{what}: row to y {bottom}");
+                assert!(row.x >= 48.0 && row.right <= 672.0 + 1e-3, "{what}");
+            }
+            for rule in &ledger.rules {
+                assert!(
+                    (200.0..724.0).contains(&rule.y),
+                    "{n} splits: rule at {}",
+                    rule.y
+                );
+            }
+        }
     }
 
     #[test]
@@ -358,7 +379,7 @@ mod tests {
             assert_near(row.x, 48.0 + 324.0 * column as f32, &what);
             assert_near(row.right, row.x + 300.0, &what);
             // Figures 0.73 em tall, centred on the row.
-            let centre = 160.0 + 36.0 * line as f32 + 18.0;
+            let centre = 200.0 + 36.0 * line as f32 + 18.0;
             assert_near(row.baseline, centre + 0.73 * 13.0 / 2.0, &what);
             assert_eq!(row.index, view.index, "{what}");
             assert_eq!(row.pace, view.pace, "{what}");
@@ -376,7 +397,7 @@ mod tests {
             let what = format!("rule {i}");
             assert_near(rule.x, 48.0 + 324.0 * column as f32, &what);
             assert_near(rule.width, 300.0, &what);
-            assert_near(rule.y, 160.0 + 36.0 * (line + 1) as f32 - 1.0, &what);
+            assert_near(rule.y, 200.0 + 36.0 * (line + 1) as f32 - 1.0, &what);
         }
     }
 
@@ -397,12 +418,11 @@ mod tests {
     }
 
     #[test]
-    fn the_fastest_kilometre_pace_is_bold_and_every_other_medium() {
+    fn only_the_fastest_kilometre_row_is_marked() {
         let ledger = ledger_of(&run(10, 460.0));
         assert_eq!(ledger.rows.len(), 11);
         for row in &ledger.rows {
-            let expected = if row.index == 4 { 700 } else { 500 };
-            assert_eq!(row.weight, expected, "km {}", row.index);
+            assert_eq!(row.fastest, row.index == 4, "km {}", row.index);
         }
     }
 
@@ -460,13 +480,21 @@ mod tests {
     }
 
     #[test]
-    fn the_template_sets_every_pace_in_ink_and_only_the_swatch_in_the_kilometre_colour() {
+    fn the_template_sets_the_paces_in_ink_or_marker_and_only_the_swatch_in_the_kilometre_colour() {
         let template = include_str!("../../templates/ledger.svg");
-        let pace = template
-            .lines()
-            .find(|line| line.contains("{{ row.pace }}"))
-            .expect("the pace text");
-        assert!(pace.contains(r#"fill="{{ theme.ink }}""#), "{pace}");
+        let line_of = |text: &str| {
+            template
+                .lines()
+                .find(|line| line.contains(text))
+                .unwrap_or_else(|| panic!("{text} in {template}"))
+        };
+        let pace = line_of("{{ row.pace }}");
+        let fill = r#"fill="{{ theme.marker if row.fastest else theme.ink }}""#;
+        assert!(pace.contains(fill), "{pace}");
+        assert!(pace.contains("{% if row.fastest %}"), "{pace}");
+        let number = line_of("{{ row.index }}");
+        let fill = r#"fill="{{ theme.marker if row.fastest else theme.muted }}""#;
+        assert!(number.contains(fill), "{number}");
         let swatch = template
             .lines()
             .find(|line| line.contains(r#"width="10" height="10" rx="3""#))
@@ -482,13 +510,13 @@ mod tests {
         assert_eq!(ledger.rows.len(), 1);
         assert!(ledger.rules.is_empty());
         let row = &ledger.rows[0];
-        assert_eq!((row.pace.as_str(), row.weight), ("5:00", 500));
+        assert_eq!((row.pace.as_str(), row.fastest), ("5:00", false));
         assert_near(row.right, 672.0, "right edge");
     }
 
     #[test]
     fn the_template_value_has_every_number_rounded_to_two_decimals() {
-        // Four columns of 25 rows of 22.4 px.
+        // Four columns of 25 rows of 20.96 px.
         let value = ledger_of(&run(99, 0.0)).to_value();
         let row = value
             .get_attr("rows")
@@ -500,7 +528,13 @@ mod tests {
         assert!(decimals <= 2, "baseline {baseline}");
         assert_eq!(row.get_attr("x").unwrap().to_string(), "48");
         assert_eq!(row.get_attr("right").unwrap().to_string(), "186");
-        assert_eq!(row.get_attr("weight").unwrap().to_string(), "500");
+        assert!(!row.get_attr("fastest").unwrap().is_true());
+        let fourth = value
+            .get_attr("rows")
+            .unwrap()
+            .get_item(&Value::from(3))
+            .unwrap();
+        assert!(fourth.get_attr("fastest").unwrap().is_true());
         assert_eq!(row.get_attr("index").unwrap().to_string(), "1");
         assert!(row.get_attr("note").unwrap().is_none());
         let swatch = row.get_attr("swatch").unwrap();
@@ -515,7 +549,7 @@ mod tests {
             .unwrap()
             .get_item(&Value::from(0))
             .unwrap();
-        assert_eq!(rule.get_attr("y").unwrap().to_string(), "181.4");
+        assert_eq!(rule.get_attr("y").unwrap().to_string(), "219.96");
         assert_eq!(rule.get_attr("width").unwrap().to_string(), "138");
         let partial = ledger_of(&run(10, 460.0))
             .to_value()

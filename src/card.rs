@@ -4,13 +4,18 @@
 
 use crate::format::{self, DOT};
 use crate::layout;
-use crate::model::{Analysis, CardData, Meta, RoutePreview, Split, SplitView, TrackPoint};
+use crate::model::{
+    Analysis, CardData, Fastest, Measure, Meta, RoutePreview, Split, SplitView, Stats, TitleView,
+    TrackPoint,
+};
 use crate::palette::{self, Palette};
 use crate::route::{self, BBox};
 use crate::text::{self, Role, TextMeasure};
 use crate::theme::Theme;
 use crate::variant::Variant;
 
+/// Left edge of the content box inside the 48 px margins.
+const LEFT: f32 = 48.0;
 /// Width of the content box inside the 48 px margins (x = 48 to 672).
 pub const CONTENT_WIDTH: f32 = 624.0;
 /// Number of 5 px rects in the 160 px legend bar.
@@ -19,41 +24,59 @@ pub const LEGEND_STEPS: usize = 32;
 /// the route preview is fitted into.
 const PREVIEW_BOX: BBox = BBox {
     x: 472.0,
-    y: 734.0,
+    y: 750.0,
     w: 200.0,
     h: 56.0,
 };
 /// Most points the route preview is drawn with.
 const PREVIEW_POINTS: usize = 120;
-/// The event title: Display at 40 px, shrunk down to 28 px, then cut.
+/// The event title: Display at 76 px, its last word in DisplayItalic,
+/// shrunk down to 44 px, then cut.
 const TITLE_LINE: Line = Line {
     role: Role::Display,
-    size: 40.0,
-    min_size: 28.0,
+    size: 76.0,
+    min_size: 44.0,
     max_width: CONTENT_WIDTH,
+    letter_spacing: 0.0,
 };
-/// The runner's name: Name at 18 px, cut but never shrunk.
-const RUNNER_LINE: Line = Line {
-    role: Role::Name,
-    size: 18.0,
-    min_size: 18.0,
+/// The byline, the runner's name: DisplayItalic at 26 px, cut but never shrunk.
+const BYLINE: Line = Line {
+    role: Role::DisplayItalic,
+    size: 26.0,
+    min_size: 26.0,
     max_width: CONTENT_WIDTH,
+    letter_spacing: 0.0,
 };
-/// The line under the title: Label at 12 px.
+/// The line under the byline: Label at 11 px in capitals, tracked by 2.2 px.
 const SUBLINE: Line = Line {
     role: Role::Label,
-    size: 12.0,
-    min_size: 12.0,
+    size: 11.0,
+    min_size: 11.0,
     max_width: CONTENT_WIDTH,
+    letter_spacing: 2.2,
 };
+/// The finish time: Numeral at 132 px tracked by -3 px, shrunk down to
+/// 80 px to fit the left 424 px, never cut.
+const TIME_LINE: Line = Line {
+    role: Role::Numeral,
+    size: 132.0,
+    min_size: 80.0,
+    max_width: 424.0,
+    letter_spacing: -3.0,
+};
+/// Size of the stats line: Text, the fastest pace in Strong.
+const STATS_SIZE: f32 = 17.0;
+/// Room between the distance and the average pace on the stats line.
+const STATS_GAP: f32 = 44.0;
 
 /// Lays out and formats everything the frame and the template of `variant`
 /// show, in the colours of `theme` with `palette` as its colour scale.
 ///
-/// A long title is set smaller, down to 28 px, and cut with an ellipsis if
+/// A long title is set smaller, down to 44 px, and cut with an ellipsis if
 /// it does not fit even then; a long name is cut; a long city is cut before
-/// the date. Only the shape block of `variant` is built, and every variant
-/// but `trail`, whose picture is the route, gets the route preview.
+/// the date; a long time is set smaller, never cut. Only the shape block of
+/// `variant` is built, and every variant but `trail`, whose picture is the
+/// route, gets the route preview.
 pub fn build(
     analysis: &Analysis,
     meta: &Meta,
@@ -66,30 +89,24 @@ pub fn build(
     let (slow, fast) = anchors(splits);
     let views = split_views(splits, slow, fast, palette);
     let average = analysis.elapsed_s / analysis.distance_m * 1000.0;
-    let fastest = analysis
-        .fastest
-        .and_then(|index| splits.iter().find(|s| s.index == index))
-        .map(|split| format::fastest(split.index, split.pace_s_per_km()))
-        .unwrap_or_default();
-    let (title, title_size) = TITLE_LINE.fit(measure, &meta.event);
-    let (runner, _) = RUNNER_LINE.fit(measure, &meta.runner);
+    let (title, title_size) = title(measure, &meta.event);
+    let time = format::duration(analysis.elapsed_s);
     let block = |shown: Variant| variant == shown;
     CardData {
         variant: variant.name(),
         theme: theme.tokens(),
         title,
         title_size,
+        runner: BYLINE.fit(measure, &meta.runner).0,
         subline: subline(meta, measure),
         legend: palette.legend(LEGEND_STEPS),
         route: match variant {
             Variant::Trail => None,
             _ => route_preview(&analysis.points),
         },
-        time: format::duration(analysis.elapsed_s),
-        distance: format::distance(analysis.distance_m),
-        pace: format::pace(average),
-        fastest,
-        runner,
+        time_size: TIME_LINE.shrink(measure, &time),
+        time,
+        stats: stats(analysis, average, measure),
         avg_t: palette::pace_position(average, slow, fast),
         avg_pace: format::pace_short(average),
         ribbon: block(Variant::Ribbon)
@@ -119,43 +136,107 @@ pub(crate) struct Line {
     pub(crate) min_size: f32,
     /// Room from the start of the text to where it must end, in px.
     pub(crate) max_width: f32,
+    /// The `letter-spacing` the line is set with, in px.
+    pub(crate) letter_spacing: f32,
 }
 
 impl Line {
     /// Whether `text` fits at `size`.
     pub(crate) fn fits(&self, measure: &TextMeasure, text: &str, size: f32) -> bool {
-        measure.width(self.role, text, size) <= self.max_width
+        measure.width_spaced(self.role, text, size, self.letter_spacing) <= self.max_width
     }
 
-    /// `text` and the largest size, in steps of 0.1 px, at which it fits; at
-    /// the minimum size and cut with an ellipsis if it does not fit even then.
-    pub(crate) fn fit(&self, measure: &TextMeasure, text: &str) -> (String, f32) {
-        if self.fits(measure, text, self.size) {
-            return (text.to_owned(), self.size);
+    /// The largest size from the minimum to the design size, in steps of
+    /// 0.1 px, that `fits` accepts; `None` if not even the minimum.
+    fn largest_size(&self, fits: impl Fn(f32) -> bool) -> Option<f32> {
+        if fits(self.size) {
+            return Some(self.size);
         }
-        if !self.fits(measure, text, self.min_size) {
-            let cut = text::truncate_to_fit(text, |t| self.fits(measure, t, self.min_size));
-            return (cut, self.min_size);
+        if !fits(self.min_size) {
+            return None;
         }
         // Bisect in tenths of a pixel: `fitting` fits, `too_large` does not.
         let tenths = |px: f32| (px * 10.0).round() as u32;
         let (mut fitting, mut too_large) = (tenths(self.min_size), tenths(self.size));
         while too_large - fitting > 1 {
             let mid = (fitting + too_large) / 2;
-            if self.fits(measure, text, mid as f32 / 10.0) {
+            if fits(mid as f32 / 10.0) {
                 fitting = mid;
             } else {
                 too_large = mid;
             }
         }
-        (text.to_owned(), fitting as f32 / 10.0)
+        Some(fitting as f32 / 10.0)
+    }
+
+    /// `text` and the largest size at which it fits; at the minimum size and
+    /// cut with an ellipsis if it does not fit even then.
+    pub(crate) fn fit(&self, measure: &TextMeasure, text: &str) -> (String, f32) {
+        match self.largest_size(|size| self.fits(measure, text, size)) {
+            Some(size) => (text.to_owned(), size),
+            None => (self.cut(measure, text), self.min_size),
+        }
+    }
+
+    /// The largest size at which `text` fits, the minimum size if it does
+    /// not fit even then: for a text that is never cut.
+    pub(crate) fn shrink(&self, measure: &TextMeasure, text: &str) -> f32 {
+        self.largest_size(|size| self.fits(measure, text, size))
+            .unwrap_or(self.min_size)
+    }
+
+    /// `text` cut with an ellipsis to fit at the minimum size.
+    fn cut(&self, measure: &TextMeasure, text: &str) -> String {
+        text::truncate_to_fit(text, |t| self.fits(measure, t, self.min_size))
     }
 }
 
-/// `<city> · <date>`, or the date alone without a city. A city too long for
-/// the line is cut with an ellipsis so the date stays whole.
+/// The title split before its last word and its size: both parts shrunk
+/// together until they fit; unsplit and cut at the minimum size if they do
+/// not fit even then.
+fn title(measure: &TextMeasure, event: &str) -> (TitleView, f32) {
+    let split = split_title(event);
+    let width = |size: f32| {
+        measure.width(Role::Display, &split.head, size)
+            + measure.width(Role::DisplayItalic, &split.tail, size)
+    };
+    match TITLE_LINE.largest_size(|size| width(size) <= TITLE_LINE.max_width) {
+        Some(size) => (split, size),
+        None => (
+            TitleView {
+                head: TITLE_LINE.cut(measure, event),
+                tail: String::new(),
+            },
+            TITLE_LINE.min_size,
+        ),
+    }
+}
+
+/// The last whitespace-separated word of `event` as the tail, everything
+/// before it, spaces included, as the head; a one-word title is all head.
+/// Trailing whitespace is dropped.
+fn split_title(event: &str) -> TitleView {
+    let trimmed = event.trim_end();
+    match trimmed.rfind(char::is_whitespace) {
+        Some(space) if !trimmed[..space].trim().is_empty() => {
+            let tail_start = space + trimmed[space..].chars().next().map_or(1, char::len_utf8);
+            TitleView {
+                head: trimmed[..tail_start].to_owned(),
+                tail: trimmed[tail_start..].to_owned(),
+            }
+        }
+        _ => TitleView {
+            head: trimmed.to_owned(),
+            tail: String::new(),
+        },
+    }
+}
+
+/// `<CITY> · <DATE>` in capitals, or the date alone without a city. A city
+/// too long for the tracked line is cut with an ellipsis so the date stays
+/// whole.
 fn subline(meta: &Meta, measure: &TextMeasure) -> String {
-    let date = format::date(meta.date);
+    let date = format::date(meta.date).to_uppercase();
     let Some(city) = meta
         .city
         .as_deref()
@@ -166,7 +247,41 @@ fn subline(meta: &Meta, measure: &TextMeasure) -> String {
     };
     let line = |city: &str| format!("{city}{DOT}{date}");
     let fits = |city: &str| SUBLINE.fits(measure, &line(city), SUBLINE.size);
-    line(&text::truncate_to_fit(city, fits))
+    line(&text::truncate_to_fit(&city.to_uppercase(), fits))
+}
+
+/// The distance and the average pace, the pace 44 px after the distance,
+/// and the fastest full kilometre if there is one.
+fn stats(analysis: &Analysis, average: f64, measure: &TextMeasure) -> Stats {
+    let distance = Measure {
+        value: format::kilometres(analysis.distance_m),
+        unit: "km".to_owned(),
+    };
+    let distance_width = measure.width(
+        Role::Text,
+        &format!("{} {}", distance.value, distance.unit),
+        STATS_SIZE,
+    );
+    let fastest = analysis
+        .fastest
+        .and_then(|index| analysis.splits.iter().find(|s| s.index == index))
+        .map(|split| {
+            let pace = format::pace_short(split.pace_s_per_km());
+            Fastest {
+                label: format::fastest_km(split.index),
+                width: measure.width(Role::Strong, &pace, STATS_SIZE),
+                pace,
+            }
+        });
+    Stats {
+        distance,
+        pace: Measure {
+            value: format::pace_short(average),
+            unit: "/km".to_owned(),
+        },
+        pace_x: LEFT + distance_width + STATS_GAP,
+        fastest,
+    }
 }
 
 /// The route fitted into [`PREVIEW_BOX`] with its aspect ratio kept,
@@ -226,6 +341,7 @@ fn split_views(splits: &[Split], slow: f64, fast: f64, palette: &Palette) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Measure, TitleView};
     use crate::palette::{anchors, pace_position};
     use time::macros::{date, datetime};
 
@@ -340,114 +456,202 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_frame_texts_are_formatted_for_the_card() {
-        let card = card(&half());
-        assert_eq!(card.title, "Harbour Half");
-        assert_eq!(card.subline, "Lisbon \u{b7} 19 April 2026");
-        assert_eq!(card.runner, "Mara Lindqvist");
-        // 19 kilometres at 5:30, 5:02, 5:52 and 30 s for the last 100 m.
-        assert_eq!(card.time, "1:55:54");
-        assert_eq!(card.distance, "21.10 km");
-        // 6954 s over 21.1 km.
-        assert_eq!(card.pace, "5:30 /km");
-        assert_eq!(card.fastest, "km 11 \u{b7} 5:02");
+    fn title(head: &str, tail: &str) -> TitleView {
+        TitleView {
+            head: head.into(),
+            tail: tail.into(),
+        }
+    }
+
+    fn measure(value: &str, unit: &str) -> Measure {
+        Measure {
+            value: value.into(),
+            unit: unit.into(),
+        }
     }
 
     #[test]
-    fn a_run_without_a_full_kilometre_names_no_fastest_one() {
+    fn the_frame_texts_are_formatted_for_the_card() {
+        let card = card(&half());
+        assert_eq!(card.title, title("Harbour ", "Half"));
+        assert_eq!(card.runner, "Mara Lindqvist");
+        assert_eq!(card.subline, "LISBON \u{b7} 19 APRIL 2026");
+        // 19 kilometres at 5:30, 5:02, 5:52 and 30 s for the last 100 m.
+        assert_eq!(card.time, "1:55:54");
+        assert_eq!(card.stats.distance, measure("21.10", "km"));
+        // 6954 s over 21.1 km.
+        assert_eq!(card.stats.pace, measure("5:30", "/km"));
+        let fastest = card.stats.fastest.expect("a fastest kilometre");
+        assert_eq!(
+            (fastest.label.as_str(), fastest.pace.as_str()),
+            ("fastest km 11", "5:02")
+        );
+    }
+
+    #[test]
+    fn a_run_without_a_full_kilometre_has_no_fastest_block() {
         let card = card(&short_run());
-        assert_eq!(card.fastest, "");
-        assert_eq!(card.distance, "0.60 km");
+        assert_eq!(card.stats.fastest, None);
+        assert_eq!(card.stats.distance, measure("0.60", "km"));
         assert_eq!(card.time, "3:00");
     }
 
     #[test]
-    fn without_a_city_the_subline_is_just_the_date() {
+    fn the_pace_follows_the_distance_after_a_44_px_gap() {
+        let card = card(&half());
+        let distance = width(Role::Text, "21.10 km", 17.0);
+        assert_near(card.stats.pace_x, 48.0 + distance + 44.0, "pace_x");
+    }
+
+    #[test]
+    fn the_fastest_block_carries_the_width_of_its_pace_in_strong() {
+        let fastest = card(&half()).stats.fastest.expect("a fastest kilometre");
+        assert_near(
+            fastest.width,
+            width(Role::Strong, "5:02", 17.0),
+            "fastest.width",
+        );
+        assert!(
+            fastest.width > width(Role::Text, "5:02", 17.0),
+            "Strong is not wider than Text"
+        );
+    }
+
+    #[test]
+    fn without_a_city_the_subline_is_just_the_date_in_capitals() {
         for city in [None, Some(String::new()), Some("  ".to_owned())] {
             let card = card_for(Meta {
                 city: city.clone(),
                 ..meta()
             });
-            assert_eq!(card.subline, "19 April 2026", "{city:?}");
+            assert_eq!(card.subline, "19 APRIL 2026", "{city:?}");
         }
+    }
+
+    #[test]
+    fn the_subline_is_set_in_capitals() {
+        let card = card_for(Meta {
+            city: Some("Zürich-Höngg".into()),
+            date: date!(2026 - 03 - 08),
+            ..meta()
+        });
+        assert_eq!(card.subline, "ZÜRICH-HÖNGG \u{b7} 8 MARCH 2026");
     }
 
     const LONG_CITY: &str = "Llanfairpwllgwyngyllgogerychwyrndrobwllllantysiliogogogoch, \
         Isle of Anglesey, Wales, United Kingdom of Great Britain and Northern Ireland";
 
+    /// The width of the tracked subline at 11 px.
+    fn subline_width(text: &str) -> f32 {
+        TextMeasure::new().width_spaced(Role::Label, text, 11.0, 2.2)
+    }
+
     #[test]
-    fn a_long_city_is_cut_first_so_the_subline_keeps_the_date() {
-        assert!(width(Role::Label, LONG_CITY, 12.0) > 624.0);
+    fn a_long_city_is_cut_first_so_the_tracked_subline_keeps_the_date() {
+        assert!(subline_width(&LONG_CITY.to_uppercase()) > 624.0);
         let card = card_for(Meta {
             city: Some(LONG_CITY.into()),
             ..meta()
         });
         let city = card
             .subline
-            .strip_suffix(" \u{b7} 19 April 2026")
+            .strip_suffix(" \u{b7} 19 APRIL 2026")
             .unwrap_or_else(|| panic!("{:?} lost the date", card.subline));
-        assert_cut_with_one_ellipsis(city, LONG_CITY);
-        let line = width(Role::Label, &card.subline, 12.0);
+        assert_cut_with_one_ellipsis(city, &LONG_CITY.to_uppercase());
+        let line = subline_width(&card.subline);
         assert!((624.0 - 12.0..=624.0).contains(&line), "{line} px");
+        // Without the tracking the cut would keep more of the city.
+        let untracked = width(Role::Label, &card.subline, 11.0);
+        assert!(untracked < 624.0 - 60.0, "{untracked} px untracked");
+    }
+
+    /// The width of a split title at `size`: the head in Display, the tail
+    /// in DisplayItalic.
+    fn title_width(title: &TitleView, size: f32) -> f32 {
+        width(Role::Display, &title.head, size) + width(Role::DisplayItalic, &title.tail, size)
     }
 
     #[test]
-    fn a_normal_title_keeps_its_full_size() {
+    fn a_two_word_title_sets_its_last_word_apart_at_76_px() {
         let card = card(&half());
-        assert_eq!(
-            (card.title.as_str(), card.title_size),
-            ("Harbour Half", 40.0)
-        );
+        assert_eq!(card.title, title("Harbour ", "Half"));
+        assert_eq!(card.title_size, 76.0);
+        assert!(title_width(&card.title, 76.0) <= 624.0);
+    }
+
+    #[test]
+    fn the_head_keeps_every_word_but_the_last_and_its_space() {
+        let card = card_for(Meta {
+            event: "Lauf  am Main ".into(),
+            ..meta()
+        });
+        assert_eq!(card.title, title("Lauf  am ", "Main"));
+    }
+
+    #[test]
+    fn a_one_word_title_is_all_head() {
+        for event in ["Spreelauf", "Spreelauf  "] {
+            let card = card_for(Meta {
+                event: event.into(),
+                ..meta()
+            });
+            assert_eq!(
+                (card.title, card.title_size),
+                (title("Spreelauf", ""), 76.0),
+                "{event:?}"
+            );
+        }
     }
 
     const LONG_EVENT: &str = "Maratona Internacional de Lisboa";
 
     #[test]
-    fn a_long_title_is_shrunk_just_enough_to_fit_624_px() {
-        assert!(width(Role::Display, LONG_EVENT, 40.0) > 624.0);
+    fn a_long_title_is_shrunk_just_enough_for_head_and_tail_to_fit_624_px() {
+        let split = title("Maratona Internacional de ", "Lisboa");
+        assert!(title_width(&split, 76.0) > 624.0);
         let card = card_for(Meta {
             event: LONG_EVENT.into(),
             ..meta()
         });
-        assert_eq!(card.title, LONG_EVENT);
+        assert_eq!(card.title, split);
         assert!(
-            (28.0..40.0).contains(&card.title_size),
+            (44.0..76.0).contains(&card.title_size),
             "size {}",
             card.title_size
         );
-        let fitted = width(Role::Display, LONG_EVENT, card.title_size);
+        let fitted = title_width(&split, card.title_size);
         assert!(fitted <= 624.0, "{fitted} px");
-        let larger = width(Role::Display, LONG_EVENT, card.title_size + 0.1);
+        let larger = title_width(&split, card.title_size + 0.1);
         assert!(larger > 624.0, "{larger} px would still fit");
     }
 
     #[test]
-    fn an_absurdly_long_title_is_cut_with_an_ellipsis_at_28_px() {
+    fn a_title_too_long_even_at_44_px_drops_the_split_and_is_cut_with_an_ellipsis() {
         let event =
             "Schneider Electric Marathon de Paris, presented by the City of Paris and Friends";
         let card = card_for(Meta {
             event: event.into(),
             ..meta()
         });
-        assert_eq!(card.title_size, 28.0);
-        assert_cut_with_one_ellipsis(&card.title, event);
-        let fitted = width(Role::Display, &card.title, 28.0);
-        assert!((624.0 - 30.0..=624.0).contains(&fitted), "{fitted} px");
+        assert_eq!(card.title_size, 44.0);
+        assert_eq!(card.title.tail, "");
+        assert_cut_with_one_ellipsis(&card.title.head, event);
+        let fitted = width(Role::Display, &card.title.head, 44.0);
+        assert!((624.0 - 44.0..=624.0).contains(&fitted), "{fitted} px");
     }
 
     #[test]
-    fn a_long_name_is_cut_with_an_ellipsis_at_its_size() {
+    fn a_long_name_is_cut_with_an_ellipsis_in_the_italic_at_26_px() {
         let runner =
             "Maximilian Alexander Konstantin Oberhauser-Lindqvist zu Hohenzollern-Sigmaringen und Waldburg";
-        assert!(width(Role::Name, runner, 18.0) > 624.0);
+        assert!(width(Role::DisplayItalic, runner, 26.0) > 624.0);
         let card = card_for(Meta {
             runner: runner.into(),
             ..meta()
         });
         assert_cut_with_one_ellipsis(&card.runner, runner);
-        let fitted = width(Role::Name, &card.runner, 18.0);
-        assert!((624.0 - 18.0..=624.0).contains(&fitted), "{fitted} px");
+        let fitted = width(Role::DisplayItalic, &card.runner, 26.0);
+        assert!((624.0 - 26.0..=624.0).contains(&fitted), "{fitted} px");
     }
 
     #[test]
@@ -457,6 +661,50 @@ mod tests {
             ..meta()
         });
         assert_eq!(card.runner, "mara de la Cruz-Lindqvist");
+    }
+
+    /// The width of the time tracked by -3 at `size`.
+    fn time_width(time: &str, size: f32) -> f32 {
+        TextMeasure::new().width_spaced(Role::Numeral, time, size, -3.0)
+    }
+
+    #[test]
+    fn the_time_is_set_at_132_px() {
+        let card = card(&half());
+        assert_eq!(card.time_size, 132.0);
+        assert!(time_width(&card.time, 132.0) <= 424.0);
+    }
+
+    #[test]
+    fn a_long_time_is_shrunk_just_enough_to_fit_424_px() {
+        let analysis = Analysis {
+            elapsed_s: 100_000.0 * 3600.0 - 1.0,
+            ..half()
+        };
+        let card = card(&analysis);
+        assert_eq!(card.time, "99999:59:59");
+        assert!(time_width(&card.time, 132.0) > 424.0);
+        assert!(
+            (80.0..132.0).contains(&card.time_size),
+            "size {}",
+            card.time_size
+        );
+        let fitted = time_width(&card.time, card.time_size);
+        assert!(fitted <= 424.0, "{fitted} px");
+        let larger = time_width(&card.time, card.time_size + 0.1);
+        assert!(larger > 424.0, "{larger} px would still fit");
+    }
+
+    #[test]
+    fn a_time_too_long_even_at_80_px_is_set_whole_at_80_px() {
+        let analysis = Analysis {
+            elapsed_s: 1e15,
+            ..half()
+        };
+        let card = card(&analysis);
+        assert_eq!(card.time, "277777777777:46:40");
+        assert!(time_width(&card.time, 80.0) > 424.0);
+        assert_eq!(card.time_size, 80.0);
     }
 
     #[test]
@@ -517,32 +765,22 @@ mod tests {
                 (
                     &other.title,
                     other.title_size,
+                    &other.runner,
                     &other.subline,
                     &other.legend
                 ),
                 (
                     &ribbon.title,
                     ribbon.title_size,
+                    &ribbon.runner,
                     &ribbon.subline,
                     &ribbon.legend
                 ),
                 "{variant}"
             );
             assert_eq!(
-                (
-                    &other.time,
-                    &other.distance,
-                    &other.pace,
-                    &other.fastest,
-                    &other.runner
-                ),
-                (
-                    &ribbon.time,
-                    &ribbon.distance,
-                    &ribbon.pace,
-                    &ribbon.fastest,
-                    &ribbon.runner
-                ),
+                (&other.time, other.time_size, &other.stats),
+                (&ribbon.time, ribbon.time_size, &ribbon.stats),
                 "{variant}"
             );
             assert_eq!(other.splits, ribbon.splits, "{variant}");
@@ -668,8 +906,8 @@ mod tests {
         let points = path_points(&preview.path);
         for &(x, y) in &points {
             assert!(
-                (472.0..=672.0).contains(&x) && (734.0..=790.0).contains(&y),
-                "({x}, {y}) lies outside x 472..672, y 734..790"
+                (472.0..=672.0).contains(&x) && (750.0..=806.0).contains(&y),
+                "({x}, {y}) lies outside x 472..672, y 750..806"
             );
         }
         let (left, right) = points
@@ -702,9 +940,9 @@ mod tests {
             .collect();
         let preview = preview_of(line, Variant::Ribbon).expect("a preview");
         let points = path_points(&preview.path);
-        assert_eq!(points.first(), Some(&(472.0, 762.0)), "{}", preview.path);
-        assert_eq!(points.last(), Some(&(672.0, 762.0)), "{}", preview.path);
-        assert_eq!(preview.start, (472.0, 762.0));
+        assert_eq!(points.first(), Some(&(472.0, 778.0)), "{}", preview.path);
+        assert_eq!(points.last(), Some(&(672.0, 778.0)), "{}", preview.path);
+        assert_eq!(preview.start, (472.0, 778.0));
     }
 
     #[test]

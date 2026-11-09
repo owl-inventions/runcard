@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use crate::layout::{
     dots::Dots, ledger::Ledger, ribbon::Ribbon, spiral::Spiral, trail::Trail, wave::Wave,
 };
-use crate::model::{CardData, RoutePreview};
+use crate::model::{CardData, Fastest, Measure, RoutePreview, Stats, TitleView};
 use crate::text::{Face, Role};
 use crate::theme::Tokens;
 use crate::variant::Variant;
@@ -40,10 +40,7 @@ pub struct Renderer {
 impl Renderer {
     /// Loads the frame, the templates of every variant and the fonts.
     pub fn new() -> Result<Self> {
-        let mut env = Environment::new();
-        env.set_auto_escape_callback(|_| AutoEscape::Html);
-        env.set_formatter(xml_formatter);
-        env.add_template("frame.svg", FRAME)?;
+        let mut env = environment()?;
         for variant in Variant::ALL {
             let (name, source) = template(variant);
             env.add_template(name, source)?;
@@ -88,11 +85,23 @@ impl Renderer {
     }
 }
 
+/// The template environment with the frame: XML escaping and the `px`
+/// filter, which rounds a template's own arithmetic like the context.
+fn environment() -> Result<Environment<'static>> {
+    let mut env = Environment::new();
+    env.set_auto_escape_callback(|_| AutoEscape::Html);
+    env.set_formatter(xml_formatter);
+    env.add_filter("px", |value: f64| px(value as f32));
+    env.add_template("frame.svg", FRAME)?;
+    Ok(env)
+}
+
 /// The template context: the fields of `CardData` with the numbers rounded,
 /// the user-given texts (title, subline, runner) cleared of characters XML
 /// forbids, and `font.<role>` holding the SVG attributes of each type role.
 /// Built by hand because minijinja's `serde` feature is off; each shape block
-/// builds its own value.
+/// builds its own value. The templates round their own arithmetic with the
+/// `px` filter.
 fn template_context(data: &CardData) -> Value {
     let splits: Vec<Value> = data
         .splits
@@ -112,16 +121,15 @@ fn template_context(data: &CardData) -> Value {
         variant => data.variant,
         theme => theme_value(&data.theme),
         font => font_value(),
-        title => xml_chars(&data.title),
+        title => title_value(&data.title),
         title_size => px(data.title_size),
+        runner => xml_chars(&data.runner),
         subline => xml_chars(&data.subline),
         legend => &data.legend,
         route => data.route.as_ref().map(route_value),
         time => &data.time,
-        distance => &data.distance,
-        pace => &data.pace,
-        fastest => &data.fastest,
-        runner => xml_chars(&data.runner),
+        time_size => px(data.time_size),
+        stats => stats_value(&data.stats),
         splits => splits,
         avg_t => px(data.avg_t),
         avg_pace => &data.avg_pace,
@@ -131,6 +139,38 @@ fn template_context(data: &CardData) -> Value {
         dots => data.dots.as_ref().map(Dots::to_value),
         wave => data.wave.as_ref().map(Wave::to_value),
         ledger => data.ledger.as_ref().map(Ledger::to_value),
+    }
+}
+
+/// `title.head` and `title.tail`, cleared of characters XML forbids.
+fn title_value(title: &TitleView) -> Value {
+    context! {
+        head => xml_chars(&title.head),
+        tail => xml_chars(&title.tail),
+    }
+}
+
+/// `stats.distance` and `stats.pace`, each a `value` and a `unit`,
+/// `stats.pace_x` and `stats.fastest` with its `label`, `pace` and `width`.
+fn stats_value(stats: &Stats) -> Value {
+    let measure = |measure: &Measure| {
+        context! {
+            value => &measure.value,
+            unit => &measure.unit,
+        }
+    };
+    let fastest = |fastest: &Fastest| {
+        context! {
+            label => &fastest.label,
+            pace => &fastest.pace,
+            width => px(fastest.width),
+        }
+    };
+    context! {
+        distance => measure(&stats.distance),
+        pace => measure(&stats.pace),
+        pace_x => px(stats.pace_x),
+        fastest => stats.fastest.as_ref().map(fastest),
     }
 }
 
@@ -151,21 +191,25 @@ fn theme_value(theme: &Tokens) -> Value {
         muted => theme.muted,
         rule => theme.rule,
         accent => theme.accent,
+        marker => theme.marker,
+        on_fast => theme.on_fast,
         dark => theme.dark,
     }
 }
 
-/// `font.display`, `font.numeral`, `font.label`, `font.name`, `font.text` and
-/// `font.mono`: the family and variation attributes of each role, marked safe
-/// so the quotes survive auto-escaping.
+/// `font.display`, `font.display_italic`, `font.numeral`, `font.label`,
+/// `font.text`, `font.strong` and `font.mono`: the family, style and
+/// variation attributes of each role, marked safe so the quotes survive
+/// auto-escaping.
 fn font_value() -> Value {
     let attributes = |role: Role| Value::from_safe_string(role.attributes());
     context! {
         display => attributes(Role::Display),
         numeral => attributes(Role::Numeral),
         label => attributes(Role::Label),
-        name => attributes(Role::Name),
+        display_italic => attributes(Role::DisplayItalic),
         text => attributes(Role::Text),
+        strong => attributes(Role::Strong),
         mono => attributes(Role::Mono),
     }
 }
@@ -252,20 +296,42 @@ mod tests {
     use crate::text::{Role, TextMeasure};
     use crate::theme::{Theme, Tokens};
 
+    /// The fastest kilometre of the fixture: its pace 36.5 px wide.
+    fn fastest() -> Fastest {
+        Fastest {
+            label: "fastest km 21".into(),
+            pace: "4:48".into(),
+            width: 36.5,
+        }
+    }
+
     fn fixture(runner: &str) -> CardData {
         CardData {
             variant: "ribbon",
             theme: Theme::Light.tokens(),
-            title: "Harbour Half".into(),
-            title_size: 40.0,
-            subline: "Lisbon \u{b7} 19 April 2026".into(),
+            title: TitleView {
+                head: "Harbour ".into(),
+                tail: "Half".into(),
+            },
+            title_size: 76.0,
+            runner: runner.into(),
+            subline: "LISBON \u{b7} 19 APRIL 2026".into(),
             legend: Palette::for_theme(Theme::Light).legend(32),
             route: None,
             time: "1:48:58".into(),
-            distance: "21.10 km".into(),
-            pace: "5:10 /km".into(),
-            fastest: "km 21 \u{b7} 4:48".into(),
-            runner: runner.into(),
+            time_size: 132.0,
+            stats: Stats {
+                distance: Measure {
+                    value: "21.10".into(),
+                    unit: "km".into(),
+                },
+                pace: Measure {
+                    value: "5:10".into(),
+                    unit: "/km".into(),
+                },
+                pace_x: 163.456,
+                fastest: Some(fastest()),
+            },
             splits: Vec::new(),
             avg_t: 0.5,
             avg_pace: "5:10".into(),
@@ -289,11 +355,22 @@ mod tests {
         }
     }
 
-    /// A route preview from (600, 760.26) to the box's right edge.
+    /// The fixture without a fastest kilometre.
+    fn without_fastest(data: CardData) -> CardData {
+        CardData {
+            stats: Stats {
+                fastest: None,
+                ..data.stats.clone()
+            },
+            ..data
+        }
+    }
+
+    /// A route preview from (600, 776.26) to the box's right edge.
     fn preview() -> RoutePreview {
         RoutePreview {
-            path: "M 600.0 760.3 L 650.5 790.0 L 672.0 734.0".into(),
-            start: (600.004, 760.256),
+            path: "M 600.0 776.3 L 650.5 806.0 L 672.0 750.0".into(),
+            start: (600.004, 776.256),
         }
     }
 
@@ -345,220 +422,323 @@ mod tests {
         }
     }
 
+    /// The text of every `<text>` element, its tspans included, in order.
+    fn texts(svg: &str) -> Vec<String> {
+        svg.split("<text")
+            .skip(1)
+            .map(|element| {
+                let content =
+                    &element[element.find('>').unwrap() + 1..element.find("</text>").unwrap()];
+                let mut text = String::new();
+                let mut in_tag = false;
+                for c in content.chars() {
+                    match c {
+                        '<' => in_tag = true,
+                        '>' => in_tag = false,
+                        c if !in_tag => text.push(c),
+                        _ => {}
+                    }
+                }
+                text
+            })
+            .collect()
+    }
+
+    const INK: &str = r##"fill="#17191d""##;
+    const MUTED: &str = r##"fill="#8a8d93""##;
+    const ACCENT: &str = r##"fill="#e2492a""##;
+
     #[test]
-    fn the_title_block_sets_the_title_in_display_and_the_subline_in_muted_label() {
+    fn the_title_sets_its_head_in_display_and_its_last_word_in_italic() {
         let svg = svg_of(&fixture("Mara Lindqvist"));
-        let ink = r##"fill="#17191d""##;
-        let muted = r##"fill="#8a8d93""##;
-        assert_attributes(
-            text_tag(&svg, "Harbour Half"),
-            &[
-                r#"x="48""#,
-                r#"y="92""#,
-                r#"font-size="40""#,
-                ink,
-                &Role::Display.attributes(),
-            ],
+        let title = format!(
+            r#"<text x="46" y="108" {} font-size="76" {INK}>Harbour <tspan {}>Half</tspan></text>"#,
+            Role::Display.attributes(),
+            Role::DisplayItalic.attributes()
         );
-        assert_attributes(
-            text_tag(&svg, "Lisbon \u{b7} 19 April 2026"),
-            &[
-                r#"x="48""#,
-                r#"y="118""#,
-                r#"font-size="12""#,
-                muted,
-                &Role::Label.attributes(),
-            ],
-        );
+        assert!(svg.contains(&title), "no {title} in {svg}");
+        assert!(Role::DisplayItalic
+            .attributes()
+            .contains(r#"font-style="italic""#));
     }
 
     #[test]
-    fn the_title_is_set_at_its_fitted_size() {
+    fn a_title_without_a_tail_is_one_text_without_a_tspan() {
         let data = CardData {
-            title_size: 31.5,
+            title: TitleView {
+                head: "Spreelauf".into(),
+                tail: String::new(),
+            },
+            title_size: 51.5,
             ..fixture("Mara Lindqvist")
         };
-        assert_attributes(
-            text_tag(&svg_of(&data), "Harbour Half"),
-            &[r#"font-size="31.5""#],
+        let svg = svg_of(&data);
+        let title = format!(
+            r#"<text x="46" y="108" {} font-size="51.5" {INK}>Spreelauf</text>"#,
+            Role::Display.attributes()
         );
+        assert!(svg.contains(&title), "no {title} in {svg}");
+        assert!(!svg.contains("<tspan></tspan>"), "{svg}");
     }
 
     #[test]
-    fn the_footer_sets_the_time_the_stat_pairs_and_the_name_as_typed() {
+    fn the_byline_sets_the_runner_in_the_italic_at_26_px() {
         let svg = svg_of(&fixture("Mara Lindqvist"));
-        let ink = r##"fill="#17191d""##;
-        let muted = r##"fill="#8a8d93""##;
-        assert_attributes(
-            text_tag(&svg, "1:48:58"),
-            &[
-                r#"x="48""#,
-                r#"y="884""#,
-                r#"font-size="72""#,
-                ink,
-                &Role::Numeral.attributes(),
-            ],
-        );
-        let pairs = [
-            ("distance", "21.10 km", "836"),
-            ("pace", "5:10 /km", "868"),
-            ("fastest", "km 21 \u{b7} 4:48", "900"),
-        ];
-        for (label, value, y) in pairs {
-            let y = format!(r#"y="{y}""#);
-            assert_attributes(
-                text_tag(&svg, label),
-                &[
-                    r#"x="420""#,
-                    &y,
-                    r#"font-size="11""#,
-                    muted,
-                    &Role::Label.attributes(),
-                ],
-            );
-            assert_attributes(
-                text_tag(&svg, value),
-                &[
-                    r#"x="672""#,
-                    &y,
-                    r#"text-anchor="end""#,
-                    r#"font-size="20""#,
-                    ink,
-                    &Role::Text.attributes(),
-                ],
-            );
-        }
         assert_attributes(
             text_tag(&svg, "Mara Lindqvist"),
             &[
                 r#"x="48""#,
-                r#"y="936""#,
-                r#"font-size="18""#,
-                ink,
-                &Role::Name.attributes(),
+                r#"y="146""#,
+                r#"font-size="26""#,
+                INK,
+                &Role::DisplayItalic.attributes(),
             ],
         );
-        assert!(!svg.contains("MARA"), "{svg}");
     }
 
     #[test]
-    fn without_a_fastest_kilometre_the_fastest_pair_is_left_out() {
-        let data = CardData {
-            fastest: String::new(),
-            ..fixture("Mara Lindqvist")
-        };
-        let svg = svg_of(&data);
-        assert!(!svg.contains(">fastest</text>"), "{svg}");
-        assert!(!svg.contains("></text>"), "an empty text element in {svg}");
-        assert!(svg.contains(">pace</text>"), "{svg}");
-    }
-
-    #[test]
-    fn the_legend_is_a_bar_of_32_five_pixel_rects_between_slower_and_faster() {
-        let data = fixture("Mara Lindqvist");
-        let svg = svg_of(&data);
-        for (i, colour) in data.legend.iter().enumerate() {
-            let rect = format!(
-                r#"<rect x="{}" y="760" width="5" height="3" fill="{colour}"/>"#,
-                48 + 5 * i
-            );
-            assert!(svg.contains(&rect), "no {rect} in {svg}");
-        }
-        let muted = r##"fill="#8a8d93""##;
+    fn the_subline_is_a_muted_label_tracked_by_2_2() {
+        let svg = svg_of(&fixture("Mara Lindqvist"));
         assert_attributes(
-            text_tag(&svg, "slower"),
+            text_tag(&svg, "LISBON \u{b7} 19 APRIL 2026"),
             &[
                 r#"x="48""#,
-                r#"y="780""#,
+                r#"y="174""#,
                 r#"font-size="11""#,
-                muted,
+                r#"letter-spacing="2.2""#,
+                MUTED,
                 &Role::Label.attributes(),
             ],
         );
-        assert_attributes(
-            text_tag(&svg, "faster"),
-            &[
-                r#"x="208""#,
-                r#"y="780""#,
-                r#"text-anchor="end""#,
-                r#"font-size="11""#,
-                muted,
-            ],
-        );
     }
 
     #[test]
-    fn a_one_pixel_rule_spans_the_content_width_at_800() {
+    fn a_one_pixel_rule_spans_the_content_width_at_740() {
         let svg = svg_of(&fixture("Mara Lindqvist"));
         assert!(
-            svg.contains(r##"<rect x="48" y="800" width="624" height="1" fill="#d9dad6"/>"##),
+            svg.contains(r##"<rect x="48" y="740" width="624" height="1" fill="#d9dad6"/>"##),
             "{svg}"
         );
     }
 
     #[test]
-    fn the_frame_draws_the_route_preview_after_the_legend_once_in_both_themes() {
+    fn the_legend_is_a_bar_of_32_five_by_four_rects_between_slower_and_faster() {
+        let data = fixture("Mara Lindqvist");
+        let svg = svg_of(&data);
+        for (i, colour) in data.legend.iter().enumerate() {
+            let rect = format!(
+                r#"<rect x="{}" y="756" width="5" height="4" fill="{colour}"/>"#,
+                48 + 5 * i
+            );
+            assert!(svg.contains(&rect), "no {rect} in {svg}");
+        }
+        let caption = [
+            r#"y="778""#,
+            r#"font-size="10""#,
+            r#"letter-spacing="1.5""#,
+            MUTED,
+            &Role::Label.attributes(),
+        ];
+        assert_attributes(text_tag(&svg, "SLOWER"), &caption);
+        assert_attributes(text_tag(&svg, "SLOWER"), &[r#"x="48""#]);
+        assert!(!text_tag(&svg, "SLOWER").contains("text-anchor"));
+        // resvg tracks after the last letter too: the end anchor makes up for it.
+        assert_attributes(text_tag(&svg, "FASTER"), &caption);
+        assert_attributes(
+            text_tag(&svg, "FASTER"),
+            &[r#"x="209.5""#, r#"text-anchor="end""#],
+        );
+    }
+
+    #[test]
+    fn the_time_is_the_numeral_tracked_by_minus_3_at_its_fitted_size() {
+        let svg = svg_of(&fixture("Mara Lindqvist"));
+        assert_attributes(
+            text_tag(&svg, "1:48:58"),
+            &[
+                r#"x="44""#,
+                r#"y="912""#,
+                r#"font-size="132""#,
+                r#"letter-spacing="-3""#,
+                INK,
+                &Role::Numeral.attributes(),
+            ],
+        );
+        let data = CardData {
+            time: "11111:06:40".into(),
+            time_size: 101.25,
+            ..fixture("Mara Lindqvist")
+        };
+        assert_attributes(
+            text_tag(&svg_of(&data), "11111:06:40"),
+            &[r#"font-size="101.25""#],
+        );
+    }
+
+    #[test]
+    fn the_stats_line_sets_distance_and_pace_in_ink_their_units_muted() {
+        let svg = svg_of(&fixture("Mara Lindqvist"));
+        let text = Role::Text.attributes();
+        // The space goes before the tspan: resvg drops a tspan's leading space.
+        let distance = format!(
+            r#"<text x="48" y="954" {text} font-size="17" {INK}>21.10 <tspan {MUTED}>km</tspan></text>"#
+        );
+        let pace = format!(
+            r#"<text x="163.46" y="954" {text} font-size="17" {INK}>5:10 <tspan {MUTED}>/km</tspan></text>"#
+        );
+        for line in [distance, pace] {
+            assert!(svg.contains(&line), "no {line} in {svg}");
+        }
+    }
+
+    #[test]
+    fn the_fastest_pace_ends_the_stats_line_in_strong_accent_after_its_label() {
+        let svg = svg_of(&fixture("Mara Lindqvist"));
+        let pace = format!(
+            r#"<text x="672" y="954" text-anchor="end" {} font-size="17" {ACCENT}>4:48</text>"#,
+            Role::Strong.attributes()
+        );
+        let label = format!(
+            r#"<text x="621.5" y="954" text-anchor="end" {} font-size="17" {MUTED}>fastest km 21</text>"#,
+            Role::Text.attributes()
+        );
+        assert_eq!(svg.matches(&pace).count(), 1, "no {pace} in {svg}");
+        assert!(svg.contains(&label), "no {label} in {svg}");
+    }
+
+    #[test]
+    fn on_light_paper_a_marker_pen_stroke_lies_under_the_fastest_pace() {
+        let svg = svg_of(&fixture("Mara Lindqvist"));
+        // 672 - 36.5 - 7, 36.5 + 14 wide, turned about its centre 672 - 36.5 / 2.
+        let mark = format!(
+            r#"<rect x="628.5" y="936" width="50.5" height="25" rx="3" {ACCENT} opacity="0.18" transform="rotate(-1.5 653.75 948.5)"/>"#
+        );
+        let at = svg
+            .find(&mark)
+            .unwrap_or_else(|| panic!("no {mark} in {svg}"));
+        assert!(
+            at < svg.find(">4:48</text>").unwrap(),
+            "the mark is drawn over the pace"
+        );
+        assert!(!svg.contains("textglow"), "{svg}");
+        assert!(!svg.contains("filter"), "{svg}");
+    }
+
+    #[test]
+    fn on_dark_paper_a_blurred_copy_glows_under_the_fastest_pace() {
+        let svg = svg_of(&fixture_as(Variant::Ribbon, Theme::Dark));
+        let defs = &svg[svg.find("<defs>").expect("defs")..svg.find("</defs>").expect("defs")];
+        let filter = &defs[defs
+            .find(r#"<filter id="textglow" x="-50%" y="-50%" width="200%" height="200%">"#)
+            .unwrap_or_else(|| panic!("no textglow filter in {defs}"))..];
+        let filter = &filter[..filter.find("</filter>").expect("a closed filter")];
+        assert!(
+            filter.contains(r#"<feGaussianBlur stdDeviation="5"/>"#),
+            "{filter}"
+        );
+        let pace = format!(
+            r##"<text x="672" y="954" text-anchor="end" {} font-size="17" fill="#ff5a36">4:48</text>"##,
+            Role::Strong.attributes()
+        );
+        let glow = format!(r#"<g filter="url(#textglow)" opacity="0.9">{pace}</g>"#);
+        let at = svg
+            .find(&glow)
+            .unwrap_or_else(|| panic!("no {glow} in {svg}"));
+        assert_eq!(svg.matches(&pace).count(), 2, "{svg}");
+        assert!(
+            svg.rfind(&pace).unwrap() > at,
+            "the crisp pace is not on top"
+        );
+        assert!(
+            !svg.contains(r#"opacity="0.18""#),
+            "a marker rect on dark: {svg}"
+        );
+    }
+
+    #[test]
+    fn without_a_fastest_kilometre_the_fastest_block_is_left_out() {
         for theme in Theme::ALL {
-            let data = CardData {
-                route: Some(preview()),
-                ..fixture_as(Variant::Ribbon, theme)
-            };
-            let svg = svg_of(&data);
-            let ink = theme.tokens().ink;
-            let path = format!(
-                r#"<path d="M 600.0 760.3 L 650.5 790.0 L 672.0 734.0" fill="none" stroke="{ink}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>"#
-            );
-            let start = format!(r#"<circle cx="600" cy="760.26" r="2.5" fill="{ink}"/>"#);
-            for tag in [&path, &start] {
-                assert_eq!(
-                    svg.matches(tag.as_str()).count(),
-                    1,
-                    "{theme}: {tag} in {svg}"
-                );
-                let at = svg.find(tag.as_str()).unwrap();
-                assert!(
-                    at > svg.find(">faster</text>").unwrap(),
-                    "{theme}: {tag} before the legend"
-                );
-                assert!(
-                    at < svg.find(r#"y="800""#).unwrap(),
-                    "{theme}: {tag} after the rule"
-                );
-            }
-            let without = svg_of(&fixture_as(Variant::Ribbon, theme));
+            let svg = svg_of(&without_fastest(fixture_as(Variant::Ribbon, theme)));
+            assert!(!svg.contains("fastest km"), "{theme}: {svg}");
+            assert!(!svg.contains(r#"opacity="0.18""#), "{theme}: {svg}");
+            assert!(!svg.contains("url(#textglow)"), "{theme}: {svg}");
             assert!(
-                !without.contains(r#"stroke-width="1.5""#),
-                "{theme}: {without}"
+                texts(&svg).iter().all(|text| !text.is_empty()),
+                "{theme}: an empty text in {svg}"
             );
-            assert!(!without.contains(r#"r="2.5""#), "{theme}: {without}");
+            assert!(svg.contains(">/km</tspan></text>"), "{theme}: {svg}");
         }
     }
 
     #[test]
     fn the_frame_draws_no_other_text() {
-        let svg = svg_of(&fixture("Mara Lindqvist"));
-        let texts: Vec<&str> = svg
-            .split("</text>")
-            .filter_map(|chunk| chunk.rsplit_once('>').map(|(_, text)| text))
-            .filter(|text| !text.trim().is_empty())
-            .collect();
-        assert_eq!(
-            texts,
-            [
-                "Harbour Half",
-                "Lisbon \u{b7} 19 April 2026",
-                "slower",
-                "faster",
-                "1:48:58",
-                "distance",
-                "21.10 km",
-                "pace",
-                "5:10 /km",
-                "fastest",
-                "km 21 \u{b7} 4:48",
-                "Mara Lindqvist",
-            ]
-        );
+        let light = svg_of(&fixture("Mara Lindqvist"));
+        let expected = [
+            "Harbour Half",
+            "Mara Lindqvist",
+            "LISBON \u{b7} 19 APRIL 2026",
+            "SLOWER",
+            "FASTER",
+            "1:48:58",
+            "21.10 km",
+            "5:10 /km",
+            "fastest km 21",
+            "4:48",
+        ];
+        assert_eq!(texts(&light), expected);
+        let dark = svg_of(&fixture_as(Variant::Ribbon, Theme::Dark));
+        // The blurred copy of the fastest pace, then the crisp one.
+        let mut glowing = expected.to_vec();
+        glowing.insert(9, "4:48");
+        assert_eq!(texts(&dark), glowing);
+    }
+
+    #[test]
+    fn the_frame_draws_the_header_the_picture_and_the_footer_in_that_order() {
+        let mut env = environment().unwrap();
+        env.add_template(
+            "probe.svg",
+            r#"{% extends "frame.svg" %}{% block viz %}<rect id="probe"/>{% endblock %}"#,
+        )
+        .unwrap();
+        let svg = env
+            .get_template("probe.svg")
+            .unwrap()
+            .render(template_context(&fixture("Mara Lindqvist")))
+            .unwrap();
+        let at = |what: &str| {
+            svg.find(what)
+                .unwrap_or_else(|| panic!("no {what} in {svg}"))
+        };
+        let order = [
+            at(r#"<rect x="0" y="0" width="720" height="1000""#),
+            at(">Harbour <tspan"),
+            at(">Mara Lindqvist</text>"),
+            at(">LISBON"),
+            at(r#"<rect id="probe"/>"#),
+            at(r#"y="740""#),
+            at(">SLOWER</text>"),
+            at(">1:48:58</text>"),
+            at(">21.10 <tspan"),
+            at(">4:48</text>"),
+        ];
+        assert!(order.is_sorted(), "{order:?} in {svg}");
+    }
+
+    #[test]
+    fn the_px_filter_rounds_the_template_arithmetic_like_the_context() {
+        let mut env = environment().unwrap();
+        env.add_template(
+            "probe.svg",
+            "{{ (672 - width - 14) | px }} {{ (672 - width / 2) | px }} {{ 40.0 | px }} {{ 7 | px }}",
+        )
+        .unwrap();
+        let out = env
+            .get_template("probe.svg")
+            .unwrap()
+            .render(context! { width => px(33.456) })
+            .unwrap();
+        assert_eq!(out, "624.54 655.27 40 7");
     }
 
     #[test]
@@ -571,10 +751,17 @@ mod tests {
             svg.contains(">&lt;b&gt;&quot;Jo&quot; O&apos;Neil&lt;/b&gt;</text>"),
             "{svg}"
         );
-        assert!(
-            svg.contains(">5:10 /km</text>"),
-            "a slash is escaped in {svg}"
-        );
+        assert!(svg.contains(">/km</tspan>"), "a slash is escaped in {svg}");
+        let data = CardData {
+            title: TitleView {
+                head: "Fish & ".into(),
+                tail: "<Chips>".into(),
+            },
+            ..fixture("Mara Lindqvist")
+        };
+        let svg = svg_of(&data);
+        assert!(svg.contains(">Fish &amp; <tspan"), "{svg}");
+        assert!(svg.contains(">&lt;Chips&gt;</tspan>"), "{svg}");
     }
 
     #[test]
@@ -599,15 +786,19 @@ mod tests {
     #[test]
     fn a_control_character_in_the_names_does_not_break_the_png() {
         let data = CardData {
-            subline: "Lis\u{1b}bon \u{b7} 19 April 2026".into(),
-            title: "Harbour\u{b} Half\u{fffe}".into(),
+            subline: "LIS\u{1b}BON \u{b7} 19 APRIL 2026".into(),
+            title: TitleView {
+                head: "Harbour\u{b} ".into(),
+                tail: "Half\u{fffe}".into(),
+            },
             ..fixture("Mara\u{1} Lindqvist")
         };
         let renderer = Renderer::new().unwrap();
         let svg = renderer.svg(&data).unwrap();
         assert!(svg.contains(">Mara Lindqvist</text>"), "{svg}");
-        assert!(svg.contains(">Harbour Half</text>"), "{svg}");
-        assert!(svg.contains(">Lisbon \u{b7} 19 April 2026</text>"), "{svg}");
+        assert!(svg.contains(">Harbour <tspan"), "{svg}");
+        assert!(svg.contains(">Half</tspan>"), "{svg}");
+        assert!(svg.contains(">LISBON \u{b7} 19 APRIL 2026</text>"), "{svg}");
         renderer.png(&svg, 1.0).expect("the svg rasterises");
     }
 
@@ -630,21 +821,71 @@ mod tests {
             let tokens = theme.tokens();
             assert_colour(pixel(&image, 5, 5), tokens.paper, &format!("{theme} paper"));
             assert_colour(
-                pixel(&image, 50, 761),
+                pixel(&image, 50, 758),
                 &data.legend[0],
                 &format!("{theme} slower end"),
             );
             assert_colour(
-                pixel(&image, 205, 761),
+                pixel(&image, 205, 758),
                 &data.legend[31],
                 &format!("{theme} faster end"),
             );
             assert_colour(
-                pixel(&image, 360, 800),
+                pixel(&image, 360, 740),
                 tokens.rule,
                 &format!("{theme} rule"),
             );
         }
+    }
+
+    #[test]
+    fn the_distance_inks_as_wide_as_its_figure_a_space_and_its_unit() {
+        let scale = 4.0;
+        let data = without_fastest(fixture("Mara Lindqvist"));
+        let image = decode(&Renderer::new().unwrap().render(&data, scale).unwrap());
+        let paper = rgb_of(Theme::Light.tokens().paper);
+        let px = |card: f32| (card * scale) as u32;
+        let inked: Vec<u32> = (px(40.0)..px(data.stats.pace_x - 10.0))
+            .filter(|&x| (px(940.0)..px(958.0)).any(|y| pixel(&image, x, y) != paper))
+            .collect();
+        let width = (inked[inked.len() - 1] - inked[0] + 1) as f32 / scale;
+        let measured = TextMeasure::new().width(Role::Text, "21.10 km", 17.0);
+        // The side bearings of the 2 and the m stay blank; without its 4.3 px
+        // space the line would ink about 6 px short.
+        assert!(
+            (measured - 3.0..=measured + 1.0).contains(&width),
+            "the distance inks {width} px, measured {measured} px"
+        );
+    }
+
+    #[test]
+    fn the_png_tints_the_light_marker_pen_stroke_with_the_accent() {
+        let renderer = Renderer::new().unwrap();
+        let image = decode(&renderer.render(&fixture("Mara Lindqvist"), 1.0).unwrap());
+        // Left of the pace, inside the stroke: 18% accent over the paper.
+        let tokens = Theme::Light.tokens();
+        let (paper, accent) = (rgb_of(tokens.paper), rgb_of(tokens.accent));
+        let tint: Vec<String> = (0..3)
+            .map(|i| {
+                let c = 0.82 * f32::from(paper[i]) + 0.18 * f32::from(accent[i]);
+                format!("{:02x}", c.round() as u8)
+            })
+            .collect();
+        assert_colour(
+            pixel(&image, 631, 948),
+            &format!("#{}", tint.concat()),
+            "the stroke",
+        );
+        let plain = decode(
+            &renderer
+                .render(&without_fastest(fixture("Mara Lindqvist")), 1.0)
+                .unwrap(),
+        );
+        assert_colour(
+            pixel(&plain, 631, 948),
+            Theme::Light.tokens().paper,
+            "no stroke",
+        );
     }
 
     #[test]
@@ -716,9 +957,7 @@ mod tests {
 
     #[test]
     fn the_glow_repeats_the_visualisation_block_exactly_and_the_light_theme_draws_it_once() {
-        let mut env = Environment::new();
-        env.set_auto_escape_callback(|_| AutoEscape::Html);
-        env.add_template("frame.svg", FRAME).unwrap();
+        let mut env = environment().unwrap();
         env.add_template(
             "probe.svg",
             r#"{% extends "frame.svg" %}{% block viz %}<rect id="probe" fill="{{ theme.ink }}"/>{% endblock %}"#,
@@ -772,6 +1011,8 @@ mod tests {
                 muted: "#070809",
                 rule: "#0a0b0c",
                 accent: "#101112",
+                marker: "#131415",
+                on_fast: "#161718",
                 dark,
             };
             let data = CardData {
@@ -786,9 +1027,47 @@ mod tests {
             colours.dedup();
             assert_eq!(
                 colours,
-                ["#010203", "#040506", "#070809", "#0a0b0c", "#0d0e0f"],
+                ["#010203", "#040506", "#070809", "#0a0b0c", "#0d0e0f", "#101112"],
                 "{variant}"
             );
+        }
+    }
+
+    #[test]
+    fn the_frame_draws_the_route_preview_after_the_legend_once_in_both_themes() {
+        for theme in Theme::ALL {
+            let data = CardData {
+                route: Some(preview()),
+                ..fixture_as(Variant::Ribbon, theme)
+            };
+            let svg = svg_of(&data);
+            let ink = theme.tokens().ink;
+            let path = format!(
+                r#"<path d="M 600.0 776.3 L 650.5 806.0 L 672.0 750.0" fill="none" stroke="{ink}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>"#
+            );
+            let start = format!(r#"<circle cx="600" cy="776.26" r="2.5" fill="{ink}"/>"#);
+            for tag in [&path, &start] {
+                assert_eq!(
+                    svg.matches(tag.as_str()).count(),
+                    1,
+                    "{theme}: {tag} in {svg}"
+                );
+                let at = svg.find(tag.as_str()).unwrap();
+                assert!(
+                    at > svg.find(">FASTER</text>").unwrap(),
+                    "{theme}: {tag} before the legend"
+                );
+                assert!(
+                    at < svg.find(">1:48:58</text>").unwrap(),
+                    "{theme}: {tag} after the time"
+                );
+            }
+            let without = svg_of(&fixture_as(Variant::Ribbon, theme));
+            assert!(
+                !without.contains(r#"stroke-width="1.5""#),
+                "{theme}: {without}"
+            );
+            assert!(!without.contains(r#"r="2.5""#), "{theme}: {without}");
         }
     }
 
@@ -805,6 +1084,7 @@ mod tests {
             }],
             avg_t: 0.333_333,
             title_size: 31.456,
+            time_size: 101.234,
             ..fixture_as(Variant::Wave, Theme::Dark)
         };
         let context = template_context(&data);
@@ -817,6 +1097,8 @@ mod tests {
             ("muted", "#7d8590"),
             ("rule", "#262b33"),
             ("accent", "#ff5a36"),
+            ("marker", "#f4efe6"),
+            ("on_fast", "#0f1115"),
         ] {
             assert_eq!(attr(&theme, key).as_str(), Some(colour), "theme.{key}");
         }
@@ -824,10 +1106,11 @@ mod tests {
         let font = attr(&context, "font");
         for (key, role) in [
             ("display", Role::Display),
+            ("display_italic", Role::DisplayItalic),
             ("numeral", Role::Numeral),
             ("label", Role::Label),
-            ("name", Role::Name),
             ("text", Role::Text),
+            ("strong", Role::Strong),
             ("mono", Role::Mono),
         ] {
             let value = attr(&font, key);
@@ -838,19 +1121,33 @@ mod tests {
                 "font.{key}"
             );
         }
+        let title = attr(&context, "title");
+        assert_eq!(attr(&title, "head").as_str(), Some("Harbour "));
+        assert_eq!(attr(&title, "tail").as_str(), Some("Half"));
         for (key, expected) in [
-            ("title", "Harbour Half"),
-            ("subline", "Lisbon \u{b7} 19 April 2026"),
+            ("subline", "LISBON \u{b7} 19 APRIL 2026"),
             ("time", "1:48:58"),
-            ("distance", "21.10 km"),
-            ("pace", "5:10 /km"),
-            ("fastest", "km 21 \u{b7} 4:48"),
             ("runner", "Mara Lindqvist"),
             ("avg_pace", "5:10"),
         ] {
             assert_eq!(attr(&context, key).as_str(), Some(expected), "{key}");
         }
+        let stats = attr(&context, "stats");
+        let distance = attr(&stats, "distance");
+        assert_eq!(attr(&distance, "value").as_str(), Some("21.10"));
+        assert_eq!(attr(&distance, "unit").as_str(), Some("km"));
+        let pace = attr(&stats, "pace");
+        assert_eq!(attr(&pace, "value").as_str(), Some("5:10"));
+        assert_eq!(attr(&pace, "unit").as_str(), Some("/km"));
+        assert_eq!(attr(&stats, "pace_x").to_string(), "163.46");
+        let fastest = attr(&stats, "fastest");
+        assert_eq!(attr(&fastest, "label").as_str(), Some("fastest km 21"));
+        assert_eq!(attr(&fastest, "pace").as_str(), Some("4:48"));
+        assert_eq!(attr(&fastest, "width").to_string(), "36.5");
+        let without = template_context(&without_fastest(data.clone()));
+        assert!(attr(&attr(&without, "stats"), "fastest").is_none());
         assert_eq!(attr(&context, "title_size").to_string(), "31.46");
+        assert_eq!(attr(&context, "time_size").to_string(), "101.23");
         assert_eq!(attr(&context, "avg_t").to_string(), "0.33");
         assert_eq!(attr(&context, "legend").len(), Some(32));
         let split = attr(&context, "splits").get_item(&Value::from(0)).unwrap();
@@ -877,11 +1174,11 @@ mod tests {
         let attr = |value: &Value, name: &str| value.get_attr(name).unwrap();
         assert_eq!(
             attr(&route, "path").as_str(),
-            Some("M 600.0 760.3 L 650.5 790.0 L 672.0 734.0")
+            Some("M 600.0 776.3 L 650.5 806.0 L 672.0 750.0")
         );
         let start = attr(&route, "start");
         assert_eq!(attr(&start, "x").to_string(), "600");
-        assert_eq!(attr(&start, "y").to_string(), "760.26");
+        assert_eq!(attr(&start, "y").to_string(), "776.26");
     }
 
     #[test]

@@ -4,45 +4,58 @@
     <filter id="glow" x="-15%" y="-30%" width="130%" height="160%">
       <feGaussianBlur stdDeviation="14"/>
     </filter>
+    <filter id="textglow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
   </defs>
 {%- endif %}
   <rect x="0" y="0" width="720" height="1000" fill="{{ theme.paper }}"/>
-
-  <text x="48" y="92" {{ font.display }} font-size="{{ title_size }}" fill="{{ theme.ink }}">{{ title }}</text>
-  <text x="48" y="118" {{ font.label }} font-size="12" fill="{{ theme.muted }}">{{ subline }}</text>
-{#- The visualisation zone, y 160 to 720. On dark paper a blurred copy of it
-    goes first, so the shapes glow; the variant templates do not know. #}
+{#- The header: the title with its last word in italic, the runner's byline
+    and the tracked subline in capitals. #}
+  <text x="46" y="108" {{ font.display }} font-size="{{ title_size }}" fill="{{ theme.ink }}">{{ title.head }}{% if title.tail %}<tspan {{ font.display_italic }}>{{ title.tail }}</tspan>{% endif %}</text>
+  <text x="48" y="146" {{ font.display_italic }} font-size="26" fill="{{ theme.ink }}">{{ runner }}</text>
+  <text x="48" y="174" {{ font.label }} font-size="11" letter-spacing="2.2" fill="{{ theme.muted }}">{{ subline }}</text>
+{#- The picture. On dark paper a blurred copy of it goes first, so the
+    shapes glow; the variant templates do not know. #}
 {%- set viz %}{% block viz %}{% endblock %}{% endset %}
 {%- if theme.dark %}
   <g filter="url(#glow)" opacity="0.35">{{ viz }}</g>
 {%- endif %}
   <g>{{ viz }}</g>
 
+  <rect x="48" y="740" width="624" height="1" fill="{{ theme.rule }}"/>
   <g>
 {%- for color in legend %}
-    <rect x="{{ 48 + loop.index0 * 5 }}" y="760" width="5" height="3" fill="{{ color }}"/>
+    <rect x="{{ 48 + loop.index0 * 5 }}" y="756" width="5" height="4" fill="{{ color }}"/>
 {%- endfor %}
   </g>
-  <text x="48" y="780" {{ font.label }} font-size="11" fill="{{ theme.muted }}">slower</text>
-  <text x="208" y="780" text-anchor="end" {{ font.label }} font-size="11" fill="{{ theme.muted }}">faster</text>
+{#- resvg tracks after the last letter too, so the right-aligned caption is
+    anchored 1.5 px further right to end with the bar. #}
+  <text x="48" y="778" {{ font.label }} font-size="10" letter-spacing="1.5" fill="{{ theme.muted }}">SLOWER</text>
+  <text x="209.5" y="778" text-anchor="end" {{ font.label }} font-size="10" letter-spacing="1.5" fill="{{ theme.muted }}">FASTER</text>
 {#- The route in miniature on the row of the legend, flush right in the box
-    x 472 to 672, y 734 to 790. Outside the visualisation, so it never glows. #}
+    x 472 to 672, y 750 to 806. Outside the picture, so it never glows. #}
 {%- if route %}
   <path d="{{ route.path }}" fill="none" stroke="{{ theme.ink }}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
   <circle cx="{{ route.start.x }}" cy="{{ route.start.y }}" r="2.5" fill="{{ theme.ink }}"/>
 {%- endif %}
 
-  <rect x="48" y="800" width="624" height="1" fill="{{ theme.rule }}"/>
-
-  <text x="48" y="884" {{ font.numeral }} font-size="72" fill="{{ theme.ink }}">{{ time }}</text>
-  <text x="420" y="836" {{ font.label }} font-size="11" fill="{{ theme.muted }}">distance</text>
-  <text x="672" y="836" text-anchor="end" {{ font.text }} font-size="20" fill="{{ theme.ink }}">{{ distance }}</text>
-  <text x="420" y="868" {{ font.label }} font-size="11" fill="{{ theme.muted }}">pace</text>
-  <text x="672" y="868" text-anchor="end" {{ font.text }} font-size="20" fill="{{ theme.ink }}">{{ pace }}</text>
-{%- if fastest %}
-  <text x="420" y="900" {{ font.label }} font-size="11" fill="{{ theme.muted }}">fastest</text>
-  <text x="672" y="900" text-anchor="end" {{ font.text }} font-size="20" fill="{{ theme.ink }}">{{ fastest }}</text>
+{#- The stats line: each unit muted, after a space outside its tspan, since
+    resvg drops a tspan's leading space. #}
+  <text x="44" y="912" {{ font.numeral }} font-size="{{ time_size }}" letter-spacing="-3" fill="{{ theme.ink }}">{{ time }}</text>
+  <text x="48" y="954" {{ font.text }} font-size="17" fill="{{ theme.ink }}">{{ stats.distance.value }} <tspan fill="{{ theme.muted }}">{{ stats.distance.unit }}</tspan></text>
+  <text x="{{ stats.pace_x }}" y="954" {{ font.text }} font-size="17" fill="{{ theme.ink }}">{{ stats.pace.value }} <tspan fill="{{ theme.muted }}">{{ stats.pace.unit }}</tspan></text>
+{#- The fastest pace flush right, its label 14 px before it. On light paper
+    a marker-pen stroke lies under the pace, on dark a blurred copy. #}
+{%- if stats.fastest %}
+{%- set fastest = stats.fastest %}
+{%- set pace %}<text x="672" y="954" text-anchor="end" {{ font.strong }} font-size="17" fill="{{ theme.accent }}">{{ fastest.pace }}</text>{% endset %}
+  <text x="{{ (672 - fastest.width - 14) | px }}" y="954" text-anchor="end" {{ font.text }} font-size="17" fill="{{ theme.muted }}">{{ fastest.label }}</text>
+{%- if theme.dark %}
+  <g filter="url(#textglow)" opacity="0.9">{{ pace }}</g>
+{%- else %}
+  <rect x="{{ (672 - fastest.width - 7) | px }}" y="936" width="{{ (fastest.width + 14) | px }}" height="25" rx="3" fill="{{ theme.accent }}" opacity="0.18" transform="rotate(-1.5 {{ (672 - fastest.width / 2) | px }} 948.5)"/>
 {%- endif %}
-
-  <text x="48" y="936" {{ font.name }} font-size="18" fill="{{ theme.ink }}">{{ runner }}</text>
+  {{ pace }}
+{%- endif %}
 </svg>

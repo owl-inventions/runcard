@@ -97,6 +97,50 @@ pub struct RoutePreview {
     pub start: (f32, f32),
 }
 
+/// The event title, its last word set apart in italic.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TitleView {
+    /// Every word but the last, with the space before it, e.g. `Harbour `;
+    /// the whole title when it has one word or is cut.
+    pub head: String,
+    /// The last word, e.g. `Half`; empty for a one-word or cut title.
+    pub tail: String,
+}
+
+/// A figure and its unit, set in two colours.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Measure {
+    /// The number, e.g. `21.10` or `5:43`.
+    pub value: String,
+    /// The unit after it, e.g. `km` or `/km`.
+    pub unit: String,
+}
+
+/// The fastest full kilometre, flush right on the stats line.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Fastest {
+    /// E.g. `fastest km 11`.
+    pub label: String,
+    /// Its pace without the unit, e.g. `5:02`.
+    pub pace: String,
+    /// Width of the pace in Strong at 17 px, which the label and the
+    /// highlight are placed by.
+    pub width: f32,
+}
+
+/// The stats line under the time: distance, average pace and the fastest km.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Stats {
+    /// The distance, e.g. `21.46` `km`.
+    pub distance: Measure,
+    /// The average pace over the whole distance, e.g. `5:43` `/km`.
+    pub pace: Measure,
+    /// Where the pace starts: 44 px after the distance.
+    pub pace_x: f32,
+    /// The fastest full kilometre; `None` without one.
+    pub fastest: Option<Fastest>,
+}
+
 /// The minijinja context for `templates/<variant>.svg` and the shared
 /// `templates/frame.svg`: every value already laid out (card pixels) and
 /// formatted (display strings).
@@ -106,12 +150,15 @@ pub struct CardData {
     pub variant: &'static str,
     /// The colours of the chosen theme.
     pub theme: Tokens,
-    /// The event title, cut with an ellipsis if it does not fit even at 28 px.
-    pub title: String,
-    /// Font size of the title in px: 40, smaller for a long title, at least 28.
+    /// The event title, cut with an ellipsis and not split if it does not
+    /// fit even at 44 px.
+    pub title: TitleView,
+    /// Font size of the title in px: 76, smaller for a long title, at least 44.
     pub title_size: f32,
-    /// `<city> · <date>` under the title, the city cut first to fit, e.g.
-    /// `Paris · 8 March 2026`; just the date without a city.
+    /// The runner's name as typed, cut with an ellipsis if it does not fit.
+    pub runner: String,
+    /// `<CITY> · <DATE>` under the byline in capitals, the city cut first to
+    /// fit, e.g. `PARIS · 8 MARCH 2026`; just the date without a city.
     pub subline: String,
     /// The colours of the legend bar, slowest first.
     pub legend: Vec<String>,
@@ -121,15 +168,10 @@ pub struct CardData {
     pub route: Option<RoutePreview>,
     /// The finish time, e.g. `1:48:58`.
     pub time: String,
-    /// The distance, e.g. `21.46 km`.
-    pub distance: String,
-    /// The average pace over the whole distance, e.g. `5:43 /km`.
-    pub pace: String,
-    /// The fastest full kilometre and its pace, e.g. `km 11 · 5:02`; empty
-    /// without a full kilometre.
-    pub fastest: String,
-    /// The runner's name as typed, cut with an ellipsis if it does not fit.
-    pub runner: String,
+    /// Font size of the time in px: 132, smaller for a long time, at least 80.
+    pub time_size: f32,
+    /// The stats line under the time.
+    pub stats: Stats,
     /// One view per split, in order.
     pub splits: Vec<SplitView>,
     /// Position of the average pace on the colour scale.

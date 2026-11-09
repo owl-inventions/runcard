@@ -5,12 +5,17 @@
     <circle cx="{{ dot.x }}" cy="{{ dot.y }}" r="{{ dot.r }}" fill="{{ dot.color }}"{% if dot.partial %} opacity="0.6"{% endif %}/>
 {%- endfor %}
 {%- if dots.fastest %}
-    <circle cx="{{ dots.fastest.x }}" cy="{{ dots.fastest.y }}" r="{{ dots.fastest.r }}" fill="none" stroke="{{ theme.ink }}" stroke-width="1.5"/>
+    <circle cx="{{ dots.fastest.x }}" cy="{{ dots.fastest.y }}" r="{{ dots.fastest.r }}" fill="none" stroke="{{ theme.marker }}" stroke-width="2"/>
 {%- endif %}
 {#- The numbers go last, haloed in paper: the ring of a fast kilometre and
-    the largest dots of small cells reach into the corner they sit in. #}
+    the largest dots of small cells reach into the corner they sit in. So
+    does the pace of the fastest, which may reach into the next row. #}
 {%- for dot in dots.dots if dot.label %}
     <text x="{{ dot.label.x }}" y="{{ dot.label.y }}" {{ font.mono }} font-size="11" fill="{{ theme.muted }}" stroke="{{ theme.paper }}" stroke-width="3" stroke-linejoin="round" paint-order="stroke">{{ dot.index }}</text>
 {%- endfor %}
+{%- if dots.fastest %}
+{%- set label = dots.fastest.label %}
+    <text x="{{ label.x }}" y="{{ label.y }}" text-anchor="{{ label.anchor }}" {{ font.mono }} font-size="12" fill="{{ theme.marker }}" stroke="{{ theme.paper }}" stroke-width="3" stroke-linejoin="round" paint-order="stroke">{{ label.text }}</text>
+{%- endif %}
 {%- endif %}
 {% endblock %}

@@ -12,18 +12,20 @@ use crate::text::{Role, TextMeasure};
 const LEFT: f32 = 48.0;
 /// Right end of the distance axis, where the run ends.
 const RIGHT: f32 = 672.0;
+/// Top of the visualisation zone, y 200 to 724.
+const ZONE_TOP: f32 = 200.0;
 /// Height of a pace at the slow anchor or slower.
-const SLOW_Y: f32 = 680.0;
+const SLOW_Y: f32 = 684.0;
 /// Height of a pace at the fast anchor or faster: fast is up.
-const FAST_Y: f32 = 200.0;
-/// Where the fill under the curve ends.
-const FLOOR: f32 = 700.0;
+const FAST_Y: f32 = 240.0;
+/// Where the fill under the curve ends, 20 px above the bottom of the zone.
+const FLOOR: f32 = 704.0;
 /// Half the curve's 4 px stroke: how far its round caps reach past its ends.
 const CAP: f32 = 2.0;
 /// A Catmull-Rom tangent is half the chord between a point's neighbours; a
 /// Bézier control point lies a third of the tangent away from its point.
 const TANGENT: f32 = 0.5 / 3.0;
-/// The label of the average line: Archivo Label at 11 px, its lowercase
+/// The label of the average line: Label at 11 px, its lowercase
 /// letters 0.53 em high, the `g` reaching 0.21 em below the baseline.
 const LABEL: &str = "average";
 const LABEL_SIZE: f32 = 11.0;
@@ -40,6 +42,16 @@ const CURVE_CLEARANCE: f32 = 2.0 + 2.0;
 /// Room the label keeps from the centre of the fastest dot: its 5 px radius
 /// and 2 px of paper.
 const DOT_CLEARANCE: f32 = 5.0 + 2.0;
+/// Room the label keeps from the fastest pace: 2 px of paper.
+const PACE_CLEARANCE: f32 = 2.0;
+/// The fastest pace is JetBrains Mono at 12 px, its figures 0.73 em tall.
+const PACE_SIZE: f32 = 12.0;
+const PACE_HEIGHT: f32 = 0.73 * PACE_SIZE;
+/// Baseline of the pace above its dot, or below it when the pace would
+/// come closer than [`PACE_ROOM`] to the top of the zone.
+const PACE_ABOVE: f32 = 12.0;
+const PACE_BELOW: f32 = 20.0;
+const PACE_ROOM: f32 = 24.0;
 
 /// A position on the card.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -95,6 +107,28 @@ pub struct Label {
     pub halo: bool,
 }
 
+/// The fastest kilometre's pace by its dot.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Callout {
+    /// E.g. `4:48`.
+    pub pace: String,
+    /// Centre, the dot's unless that would take the pace out of the zone.
+    pub x: f32,
+    /// Baseline, 12 px above the dot, or 20 px below it near the top of the zone.
+    pub y: f32,
+    /// The `text-anchor`: `middle`.
+    pub anchor: &'static str,
+    /// Width of the pace, which the `average` label keeps clear of.
+    pub width: f32,
+}
+
+/// The fastest full kilometre: a dot in the marker colour and its pace.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Fastest {
+    pub dot: Point,
+    pub label: Callout,
+}
+
 /// What `templates/wave.svg` draws inside the visualisation zone.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Wave {
@@ -111,8 +145,8 @@ pub struct Wave {
     pub line_to: f32,
     /// Where the `average` label goes.
     pub label: Label,
-    /// The fastest full kilometre's point, if there is one.
-    pub fastest: Option<Point>,
+    /// The fastest full kilometre's dot and pace, if there is one.
+    pub fastest: Option<Fastest>,
 }
 
 /// Lays out the wave in card pixels.
@@ -120,9 +154,10 @@ pub struct Wave {
 /// Each kilometre is a point at the middle of its stretch of the distance
 /// (so the partial one sits in a narrow stretch at the end) and at the height
 /// of its palette position; the curve is the Catmull-Rom spline through the
-/// points, held within their heights (see [`spline`]). The average line sits
-/// at the height of the average pace's palette position, its label just above
-/// its right end unless the curve is there.
+/// points, held within their heights (see [`spline`]). The fastest full
+/// kilometre's point gets a dot and its pace. The average line sits at the
+/// height of the average pace's palette position, its label just above its
+/// right end unless the curve or the fastest kilometre is there.
 pub fn build(
     analysis: &Analysis,
     splits: &[SplitView],
@@ -157,11 +192,17 @@ pub fn build(
     let fastest = analysis
         .fastest
         .and_then(|index| splits.iter().position(|view| view.index == index))
-        .map(|i| points[i]);
+        .map(|i| {
+            let pace = &splits[i].pace;
+            Fastest {
+                dot: points[i],
+                label: callout(points[i], pace, measure.width(Role::Mono, pace, PACE_SIZE)),
+            }
+        });
     let avg_y = y_of(average_position(analysis));
     let width = measure.width(Role::Label, LABEL, LABEL_SIZE);
     Wave {
-        label: label_position(&sections, fastest, avg_y, width),
+        label: label_position(&sections, fastest.as_ref(), avg_y, width),
         sections,
         floor: FLOOR,
         avg_y,
@@ -245,6 +286,25 @@ fn offset(points: &[Point], i: usize) -> Point {
     Point { x, y }
 }
 
+/// The pace `pace`, `width` px wide, of the fastest kilometre's `dot`:
+/// centred 12 px above it, or 20 px below it when it would come within 24 px
+/// of the top of the zone; moved in from the zone's sides to stay inside it.
+fn callout(dot: Point, pace: &str, width: f32) -> Callout {
+    let y = if dot.y - PACE_ROOM < ZONE_TOP {
+        dot.y + PACE_BELOW
+    } else {
+        dot.y - PACE_ABOVE
+    };
+    let half = width / 2.0;
+    Callout {
+        pace: pace.to_owned(),
+        x: dot.x.clamp(LEFT + half, RIGHT - half),
+        y,
+        anchor: "middle",
+        width,
+    }
+}
+
 /// The straight line from `from` to `to` as a cubic Bézier.
 fn straight(from: Point, to: Point) -> Cubic {
     let at = |f: f32| Point {
@@ -280,9 +340,14 @@ fn average_position(analysis: &Analysis) -> f32 {
 
 /// The label of the average line at `avg_y`, `width` px wide: just above
 /// the line's right end, else just below it, else stepping left along the
-/// line until the curve and the fastest dot are clear of it; above the right
-/// end on a halo if they never are.
-fn label_position(sections: &[Section], dot: Option<Point>, avg_y: f32, width: f32) -> Label {
+/// line until the curve and the fastest kilometre are clear of it; above the
+/// right end on a halo if they never are.
+fn label_position(
+    sections: &[Section],
+    fastest: Option<&Fastest>,
+    avg_y: f32,
+    width: f32,
+) -> Label {
     let mut right = RIGHT;
     while right - width >= LEFT {
         for baseline in [avg_y - LABEL_ABOVE, avg_y + LABEL_BELOW] {
@@ -290,7 +355,7 @@ fn label_position(sections: &[Section], dot: Option<Point>, avg_y: f32, width: f
                 x: right,
                 y: baseline,
             };
-            if is_clear(sections, dot, at, width) {
+            if is_clear(sections, fastest, at, width) {
                 return Label {
                     x: at.x,
                     y: at.y,
@@ -308,8 +373,8 @@ fn label_position(sections: &[Section], dot: Option<Point>, avg_y: f32, width: f
 }
 
 /// Whether the label ending at `label.x` on the baseline `label.y` keeps
-/// its room from the curve and the dot.
-fn is_clear(sections: &[Section], dot: Option<Point>, label: Point, width: f32) -> bool {
+/// its room from the curve and the fastest kilometre's dot and pace.
+fn is_clear(sections: &[Section], fastest: Option<&Fastest>, label: Point, width: f32) -> bool {
     let (left, top, bottom) = (
         label.x - width,
         label.y - LABEL_ASCENT,
@@ -321,8 +386,15 @@ fn is_clear(sections: &[Section], dot: Option<Point>, label: Point, width: f32) 
         let dy = (top - p.y).max(p.y - bottom).max(0.0);
         dx.hypot(dy)
     };
-    let dot_clear = dot.is_none_or(|dot| distance(dot) > DOT_CLEARANCE);
-    dot_clear
+    let fastest_clear = fastest.is_none_or(|fastest| {
+        let pace = &fastest.label;
+        let half = pace.width / 2.0;
+        // The gaps between the two labels' boxes, negative where they overlap.
+        let dx = (left - (pace.x + half)).max(pace.x - half - label.x);
+        let dy = (top - pace.y).max(pace.y - PACE_HEIGHT - bottom);
+        distance(fastest.dot) > DOT_CLEARANCE && dx.max(dy) > PACE_CLEARANCE
+    });
+    fastest_clear
         && sections.iter().all(|section| {
             let curve = &section.curve;
             // Samples about a pixel apart along the curve.
@@ -387,7 +459,18 @@ impl Wave {
                 y => px(self.label.y),
                 halo => self.label.halo,
             },
-            fastest => self.fastest.map(|p| context! { x => px(p.x), y => px(p.y) }),
+            fastest => self.fastest.as_ref().map(|fastest| {
+                let (dot, label) = (fastest.dot, &fastest.label);
+                context! {
+                    dot => context! { x => px(dot.x), y => px(dot.y) },
+                    label => context! {
+                        pace => &label.pace,
+                        x => px(label.x),
+                        y => px(label.y),
+                        anchor => label.anchor,
+                    },
+                }
+            }),
         }
     }
 }
@@ -485,10 +568,10 @@ mod tests {
     }
 
     #[test]
-    fn the_slow_anchor_is_at_y_680_and_the_fast_one_at_y_200() {
-        assert_near(y_of(0.0), 680.0, "slow anchor");
-        assert_near(y_of(0.5), 440.0, "half way");
-        assert_near(y_of(1.0), 200.0, "fast anchor");
+    fn the_slow_anchor_is_at_y_684_and_the_fast_one_at_y_240() {
+        assert_near(y_of(0.0), 684.0, "slow anchor");
+        assert_near(y_of(0.5), 462.0, "half way");
+        assert_near(y_of(1.0), 240.0, "fast anchor");
     }
 
     #[test]
@@ -503,7 +586,7 @@ mod tests {
             let what = format!("km {}", view.index);
             let middle = if view.partial { 5.25 } else { i as f32 + 0.5 };
             assert_near(point.x, 48.0 + middle * km, &what);
-            assert_near(point.y, 680.0 - 480.0 * view.t, &what);
+            assert_near(point.y, 684.0 - 444.0 * view.t, &what);
         }
     }
 
@@ -644,7 +727,7 @@ mod tests {
         let wave = card.wave.expect("the wave block");
         assert_eq!(wave.sections.len(), 1);
         let curve = wave.sections[0].curve;
-        let y = 680.0 - 480.0 * card.splits[0].t;
+        let y = 684.0 - 444.0 * card.splits[0].t;
         for (what, p) in [
             ("from", curve.from),
             ("c1", curve.c1),
@@ -663,20 +746,89 @@ mod tests {
     fn the_average_line_spans_the_zone_at_the_average_palette_position() {
         let card = card_of(&five_and_a_half());
         let wave = card.wave.expect("the wave block");
-        assert_near(wave.avg_y, 680.0 - 480.0 * card.avg_t, "average line");
+        assert_near(wave.avg_y, 684.0 - 444.0 * card.avg_t, "average line");
         assert_near(wave.line_from, 48.0, "left end");
         assert_near(wave.line_to, 672.0, "right end");
-        assert_near(wave.floor, 700.0, "floor of the fill");
+        // 20 px under the slow anchor and 20 px above the bottom of the zone.
+        assert_near(wave.floor, 704.0, "floor of the fill");
     }
 
     #[test]
     fn the_fastest_kilometre_point_gets_the_dot() {
         let wave = wave_of(&five_and_a_half());
-        assert_eq!(wave.fastest, Some(points(&wave)[2]));
+        let fastest = wave.fastest.as_ref().expect("km 3 is the fastest");
+        assert_eq!(fastest.dot, points(&wave)[2]);
         assert_eq!(
             wave_of(&analysis(vec![split(1, 600.0, 180.0)])).fastest,
             None
         );
+    }
+
+    #[test]
+    fn the_fastest_pace_is_centred_12_px_above_its_dot() {
+        let fastest = wave_of(&five_and_a_half())
+            .fastest
+            .expect("km 3 is the fastest");
+        let label = &fastest.label;
+        assert_eq!(label.pace, "4:50");
+        assert_eq!(label.anchor, "middle");
+        assert_near(label.x, fastest.dot.x, "centre of the pace");
+        assert_near(label.y, fastest.dot.y - 12.0, "baseline");
+        let width = TextMeasure::new().width(Role::Mono, "4:50", 12.0);
+        assert_near(label.width, width, "width of the pace");
+    }
+
+    #[test]
+    fn the_pace_goes_under_its_dot_when_it_would_reach_within_24_px_of_the_zone_top() {
+        let above = callout(point(300.0, 224.0), "4:48", 28.8);
+        assert_near(above.y, 212.0, "a dot at y 224");
+        let below = callout(point(300.0, 223.0), "4:48", 28.8);
+        assert_near(below.y, 243.0, "a dot at y 223");
+        assert_eq!((above.anchor, below.anchor), ("middle", "middle"));
+        assert_near(below.x, 300.0, "centre of the pace");
+    }
+
+    #[test]
+    fn the_pace_moves_in_from_the_sides_of_the_zone_to_stay_inside_it() {
+        assert_near(callout(point(50.0, 400.0), "4:48", 30.0).x, 63.0, "left");
+        assert_near(callout(point(670.0, 400.0), "4:48", 30.0).x, 657.0, "right");
+    }
+
+    #[test]
+    fn the_curve_its_fill_and_the_fastest_pace_stay_inside_the_zone() {
+        // Forty-two kilometres, the first the fastest: its dot near x 48.
+        let first = analysis(
+            (1..=42)
+                .map(|km| {
+                    split(
+                        km,
+                        1000.0,
+                        if km == 1 {
+                            270.0
+                        } else {
+                            300.0 + f64::from(km % 7) * 5.0
+                        },
+                    )
+                })
+                .collect(),
+        );
+        for run in [five_and_a_half(), first] {
+            let wave = wave_of(&run);
+            for p in points(&wave) {
+                // Between the anchors, the 4 px stroke reaching 2 px past them.
+                assert!((50.0..=670.0).contains(&p.x), "point at x {}", p.x);
+                assert!((240.0..=684.0).contains(&p.y), "point at y {}", p.y);
+            }
+            assert!(wave.floor <= 724.0 && (200.0..=724.0).contains(&wave.avg_y));
+            let label = wave.fastest.expect("a fastest km").label;
+            let (left, right) = (label.x - label.width / 2.0, label.x + label.width / 2.0);
+            assert!(
+                left >= 48.0 - 1e-3 && right <= 672.0 + 1e-3,
+                "{left}..{right}"
+            );
+            let top = label.y - 0.73 * 12.0;
+            assert!(top >= 200.0 && label.y <= 724.0, "{top}..{}", label.y);
+        }
     }
 
     /// A straight section from (`x0`, `y0`) to (`x1`, `y1`).
@@ -730,11 +882,37 @@ mod tests {
         assert!(!label.halo);
     }
 
+    /// The fastest kilometre's dot at `dot`, its pace set at `pace`.
+    fn fastest(dot: Point, pace: Point) -> Fastest {
+        Fastest {
+            dot,
+            label: Callout {
+                pace: "4:48".into(),
+                x: pace.x,
+                y: pace.y,
+                anchor: "middle",
+                width: 28.8,
+            },
+        }
+    }
+
     #[test]
     fn the_label_keeps_clear_of_the_fastest_dot() {
         let dot = point(650.0, 390.0);
+        let far = point(100.0, 600.0);
         assert_eq!(
-            label_position(&[], Some(dot), 400.0, 40.0),
+            label_position(&[], Some(&fastest(dot, far)), 400.0, 40.0),
+            label(672.0, 412.0, false)
+        );
+    }
+
+    #[test]
+    fn the_label_keeps_clear_of_the_fastest_pace() {
+        // The pace from x 637.6 to 666.4 and y 383.24 to 392, the dot far away.
+        let pace = point(652.0, 392.0);
+        let far = point(100.0, 600.0);
+        assert_eq!(
+            label_position(&[], Some(&fastest(far, pace)), 400.0, 40.0),
             label(672.0, 412.0, false)
         );
     }
@@ -772,7 +950,7 @@ mod tests {
             line_from: 48.0,
             line_to: 672.0,
             label: label(672.0, 427.333, true),
-            fastest: Some(point(100.0, 400.0)),
+            fastest: Some(fastest(point(100.0, 400.0), point(100.0, 388.0))),
         };
         let value = wave.to_value();
         let section = value
@@ -797,7 +975,13 @@ mod tests {
         let label = value.get_attr("label").unwrap();
         assert_eq!(label.get_attr("y").unwrap().to_string(), "427.33");
         assert!(label.get_attr("halo").unwrap().is_true());
-        let dot = value.get_attr("fastest").unwrap();
+        let fastest = value.get_attr("fastest").unwrap();
+        let dot = fastest.get_attr("dot").unwrap();
         assert_eq!(dot.get_attr("x").unwrap().to_string(), "100");
+        assert_eq!(dot.get_attr("y").unwrap().to_string(), "400");
+        let pace = fastest.get_attr("label").unwrap();
+        assert_eq!(pace.get_attr("y").unwrap().to_string(), "388");
+        assert_eq!(pace.get_attr("anchor").unwrap().as_str(), Some("middle"));
+        assert_eq!(pace.get_attr("pace").unwrap().as_str(), Some("4:48"));
     }
 }

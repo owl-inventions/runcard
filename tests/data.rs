@@ -190,8 +190,8 @@ fn the_bundled_sample_is_a_1_48_58_half_marathon_in_lisbon_with_a_fast_finish() 
 /// Regenerates `examples/sample.gpx` and the cards rendered from it, as the
 /// CLI renders them for `--runner "Mara Lindqvist" --city Lisbon`:
 /// `examples/<variant>.png` for every variant at scale 1,
-/// `examples/ribbon-dark.png` and `examples/sample.png`, the ribbon card at
-/// scale 2. Run with `cargo test --test data -- --ignored`.
+/// `examples/spiral-dark.png` and `examples/sample.png`, the default card
+/// (the spiral) at scale 2. Run with `cargo test --test data -- --ignored`.
 #[test]
 #[ignore = "writes examples/sample.gpx and the example PNGs; run after changing the sample or a template"]
 fn generate_samples() {
@@ -220,8 +220,8 @@ fn generate_samples() {
         let png = card(variant, Theme::Light, 1.0);
         std::fs::write(example(&format!("{variant}.png")), png).unwrap();
     }
-    let dark = card(Variant::Ribbon, Theme::Dark, 1.0);
-    std::fs::write(example("ribbon-dark.png"), dark).unwrap();
-    let sample = card(Variant::Ribbon, Theme::Light, 2.0);
+    let dark = card(Variant::default(), Theme::Dark, 1.0);
+    std::fs::write(example("spiral-dark.png"), dark).unwrap();
+    let sample = card(Variant::default(), Theme::Light, 2.0);
     std::fs::write(example("sample.png"), sample).unwrap();
 }
