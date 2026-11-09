@@ -12,6 +12,7 @@ use crate::model::Meta;
 use crate::palette::Palette;
 use crate::render::Renderer;
 use crate::text::TextMeasure;
+use crate::theme::Theme;
 use crate::variant::Variant;
 use crate::{card, gpx, splits};
 
@@ -21,11 +22,11 @@ const DEFAULT_EVENT: &str = "Run";
 /// What the card shows besides the track, and how large it is rastered.
 #[derive(Debug, Clone)]
 pub struct CardRequest {
-    /// Runner's name, printed in capitals.
+    /// Runner's name, shown as typed.
     pub runner: String,
     /// Event name; without one the track name, else "Run".
     pub event: Option<String>,
-    /// City for the header line.
+    /// City for the line under the title.
     pub city: Option<String>,
     /// Date of the run; without one the UTC date of the first timestamp, else today.
     pub date: Option<Date>,
@@ -33,6 +34,8 @@ pub struct CardRequest {
     pub scale: f32,
     /// The card look.
     pub variant: Variant,
+    /// The paper and ink, independent of the variant.
+    pub theme: Theme,
 }
 
 /// The card as SVG and PNG, with the time spent in each stage.
@@ -58,17 +61,16 @@ impl Pipeline {
         Ok(Self {
             renderer: Renderer::new()?,
             measure: TextMeasure::new(),
-            light: Palette::light(),
-            dark: Palette::dark(),
+            light: Palette::for_theme(Theme::Light),
+            dark: Palette::for_theme(Theme::Dark),
         })
     }
 
-    /// The colour scale of `variant`: dark for a dark variant, else light.
-    fn palette(&self, variant: Variant) -> &Palette {
-        if variant.is_dark() {
-            &self.dark
-        } else {
-            &self.light
+    /// The colour scale of `theme`.
+    fn palette(&self, theme: Theme) -> &Palette {
+        match theme {
+            Theme::Light => &self.light,
+            Theme::Dark => &self.dark,
         }
     }
 
@@ -118,9 +120,10 @@ impl Pipeline {
         let data = card::build(
             &analysis,
             &meta,
-            self.palette(req.variant),
+            self.palette(req.theme),
             &self.measure,
             req.variant,
+            req.theme,
         );
         clock.lap("layout");
 

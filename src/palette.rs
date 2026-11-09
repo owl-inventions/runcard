@@ -1,33 +1,31 @@
-//! Maps split paces to stripe colours with a colour gradient.
+//! Maps split paces to colours on a slow-to-fast gradient.
 
 use colorgrad::{BlendMode, Gradient, GradientBuilder, LinearGradient};
 
-/// Gradient stops of the light scale from the slowest to the fastest pace:
-/// slate blue through cream to orange.
-const LIGHT_STOPS: [&str; 5] = ["#2c4a5e", "#9fb6c3", "#f3e3c8", "#f6a43a", "#e8601c"];
-/// Gradient stops of the dark scale: violet, blue, teal, yellow, red-orange.
-const DARK_STOPS: [&str; 5] = ["#3b2a6b", "#2f6fb3", "#3fc1b0", "#f6c445", "#ff5a36"];
+use crate::theme::Theme;
 
-/// The slow-to-fast colour scale of the stripes and the legend, interpolated
-/// in Oklab so the steps look even.
+/// Gradient stops on light paper from the slowest to the fastest pace: ink
+/// violet, periwinkle, teal, sage and warm yellow.
+const LIGHT_STOPS: [&str; 5] = ["#2e2a4f", "#5b5e9b", "#5fa39f", "#a9c86a", "#efd35a"];
+/// Gradient stops on dark paper, bright enough to glow: indigo, blue, teal,
+/// yellow and coral.
+const DARK_STOPS: [&str; 5] = ["#4b3f8a", "#2f6fb3", "#3fc1b0", "#f6c445", "#ff5a36"];
+
+/// The slow-to-fast colour scale of the kilometres and the legend,
+/// interpolated in Oklab so the steps look even.
 pub struct Palette {
     gradient: LinearGradient,
 }
 
 impl Palette {
-    /// The scale for the light variants.
-    pub fn light() -> Self {
-        Self::with_stops(&LIGHT_STOPS)
-    }
-
-    /// The scale for the dark variant, bright enough to stand out on black.
-    pub fn dark() -> Self {
-        Self::with_stops(&DARK_STOPS)
-    }
-
-    fn with_stops(stops: &[&str]) -> Self {
+    /// The scale for cards in `theme`.
+    pub fn for_theme(theme: Theme) -> Self {
+        let stops = match theme {
+            Theme::Light => LIGHT_STOPS,
+            Theme::Dark => DARK_STOPS,
+        };
         let gradient = GradientBuilder::new()
-            .html_colors(stops)
+            .html_colors(&stops)
             .mode(BlendMode::Oklab)
             .build::<LinearGradient>()
             .expect("the palette stops are valid colours");
@@ -44,13 +42,6 @@ impl Palette {
     pub fn legend(&self, n: usize) -> Vec<String> {
         let last = n.saturating_sub(1).max(1) as f32;
         (0..n).map(|i| self.hex(i as f32 / last)).collect()
-    }
-}
-
-/// The light scale.
-impl Default for Palette {
-    fn default() -> Self {
-        Self::light()
     }
 }
 
@@ -113,10 +104,8 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
 mod tests {
     use super::*;
 
-    const SLOWEST: &str = "#2c4a5e";
-    const FASTEST: &str = "#e8601c";
-    const DARK_SLOWEST: &str = "#3b2a6b";
-    const DARK_FASTEST: &str = "#ff5a36";
+    const LIGHT: [&str; 5] = ["#2e2a4f", "#5b5e9b", "#5fa39f", "#a9c86a", "#efd35a"];
+    const DARK: [&str; 5] = ["#4b3f8a", "#2f6fb3", "#3fc1b0", "#f6c445", "#ff5a36"];
 
     fn assert_hex(color: &str) {
         assert_eq!(color.len(), 7, "{color:?} is not #rrggbb");
@@ -128,57 +117,65 @@ mod tests {
         assert_eq!(color, color.to_lowercase(), "{color:?} is not lowercase");
     }
 
-    #[test]
-    fn the_ends_of_the_scale_are_the_first_and_last_stops() {
-        let palette = Palette::light();
-        assert_eq!(palette.hex(0.0), SLOWEST);
-        assert_eq!(palette.hex(1.0), FASTEST);
+    fn quarters(palette: &Palette) -> Vec<String> {
+        [0.0, 0.25, 0.5, 0.75, 1.0].map(|t| palette.hex(t)).to_vec()
     }
 
     #[test]
-    fn the_inner_stops_sit_at_the_quarters_and_blend_in_oklab_between() {
-        let palette = Palette::light();
-        assert_eq!(palette.hex(0.25), "#9fb6c3");
-        assert_eq!(palette.hex(0.5), "#f3e3c8");
-        assert_eq!(palette.hex(0.75), "#f6a43a");
-        // Halfway between the first two stops; blending in RGB gives #668091.
-        assert_eq!(palette.hex(0.125), "#637e8f");
+    fn the_light_scale_runs_from_ink_violet_through_its_stops_to_warm_yellow() {
+        assert_eq!(quarters(&Palette::for_theme(Theme::Light)), LIGHT);
     }
 
     #[test]
-    fn the_dark_scale_runs_from_violet_through_its_stops_to_red() {
-        let palette = Palette::dark();
-        assert_eq!(palette.hex(0.0), DARK_SLOWEST);
-        assert_eq!(palette.hex(0.25), "#2f6fb3");
-        assert_eq!(palette.hex(0.5), "#3fc1b0");
-        assert_eq!(palette.hex(0.75), "#f6c445");
-        assert_eq!(palette.hex(1.0), DARK_FASTEST);
-        // Halfway between the teal and the yellow stop, blended in Oklab.
-        assert_eq!(palette.hex(0.625), "#acc586");
+    fn the_dark_scale_runs_from_indigo_through_blue_teal_and_yellow_to_coral() {
+        assert_eq!(quarters(&Palette::for_theme(Theme::Dark)), DARK);
     }
 
-    /// Hue angle in Oklab, in degrees from 0 to 360, at position `t`.
-    fn oklab_hue(palette: &Palette, t: f32) -> f32 {
-        let [_, a, b, _] = palette.gradient.at(t).to_oklaba();
-        b.atan2(a).to_degrees().rem_euclid(360.0)
+    #[test]
+    fn between_the_stops_the_scales_blend_in_oklab() {
+        let light = Palette::for_theme(Theme::Light);
+        // Halfway between the first two stops; in RGB it would be #44446f.
+        assert_eq!(light.hex(0.125), "#444374");
+        assert_eq!(light.hex(0.625), "#85b689");
+        let dark = Palette::for_theme(Theme::Dark);
+        assert_eq!(dark.hex(0.125), "#43579e");
+        assert_eq!(dark.hex(0.625), "#acc586");
+    }
+
+    /// Lightness and hue angle (degrees, 0 to 360) in Oklab at 41 even steps.
+    fn oklab_lightness_and_hue(palette: &Palette) -> Vec<(f32, f32)> {
+        (0..=40)
+            .map(|i| {
+                let [l, a, b, _] = palette.gradient.at(i as f32 / 40.0).to_oklaba();
+                (l, b.atan2(a).to_degrees().rem_euclid(360.0))
+            })
+            .collect()
     }
 
     #[test]
     fn both_scales_walk_the_hue_one_way_from_slow_to_fast() {
-        for (name, palette) in [("light", Palette::light()), ("dark", Palette::dark())] {
-            let hues: Vec<f32> = (0..=40)
-                .map(|i| oklab_hue(&palette, i as f32 / 40.0))
-                .collect();
+        for theme in Theme::ALL {
+            let samples = oklab_lightness_and_hue(&Palette::for_theme(theme));
             assert!(
-                hues.windows(2).all(|w| w[1] < w[0]),
-                "the {name} hue does not fall steadily: {hues:?}"
+                samples.windows(2).all(|w| w[1].1 < w[0].1),
+                "the {theme} hue does not fall steadily: {samples:?}"
             );
         }
     }
 
     #[test]
+    fn the_light_scale_gets_lighter_from_slow_to_fast() {
+        let samples = oklab_lightness_and_hue(&Palette::for_theme(Theme::Light));
+        assert!(
+            samples.windows(2).all(|w| w[1].0 > w[0].0),
+            "the lightness does not rise steadily: {samples:?}"
+        );
+    }
+
+    #[test]
     fn every_sample_is_a_lowercase_rrggbb_colour() {
-        for palette in [Palette::light(), Palette::dark()] {
+        for theme in Theme::ALL {
+            let palette = Palette::for_theme(theme);
             for i in 0..=20 {
                 assert_hex(&palette.hex(i as f32 / 20.0));
             }
@@ -186,26 +183,18 @@ mod tests {
     }
 
     #[test]
-    fn the_legend_spans_the_whole_scale() {
-        let legend = Palette::default().legend(5);
-        assert_eq!(legend.len(), 5);
-        assert_eq!(legend[0], SLOWEST);
-        assert_eq!(legend[4], FASTEST);
-        legend.iter().for_each(|c| assert_hex(c));
-    }
-
-    #[test]
-    fn the_dark_legend_spans_the_dark_scale() {
-        let legend = Palette::dark().legend(5);
+    fn the_legend_walks_the_whole_scale_in_even_steps() {
+        let palette = Palette::for_theme(Theme::Light);
+        let legend = palette.legend(32);
+        assert_eq!(legend.len(), 32);
+        for (i, colour) in legend.iter().enumerate() {
+            assert_eq!(*colour, palette.hex(i as f32 / 31.0), "colour {i}");
+        }
         assert_eq!(
-            legend,
-            [DARK_SLOWEST, "#2f6fb3", "#3fc1b0", "#f6c445", DARK_FASTEST]
+            (legend[0].as_str(), legend[31].as_str()),
+            (LIGHT[0], LIGHT[4])
         );
-    }
-
-    #[test]
-    fn the_default_palette_is_the_light_one() {
-        assert_eq!(Palette::default().legend(9), Palette::light().legend(9));
+        assert_eq!(Palette::for_theme(Theme::Dark).legend(5), DARK);
     }
 
     #[test]

@@ -1,7 +1,10 @@
-//! The shape blocks of the variants that draw more than classic, one module
-//! each. A block is built only when its variant is rendered.
+//! The shape blocks of the variants, one module each: what a variant draws
+//! inside the visualisation zone of the shared frame. A block is built only
+//! when its variant is rendered.
 
-pub mod bars;
-pub mod mosaic;
-pub mod rings;
-pub mod route_hero;
+pub mod dots;
+pub mod ledger;
+pub mod ribbon;
+pub mod spiral;
+pub mod trail;
+pub mod wave;

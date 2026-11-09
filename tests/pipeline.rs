@@ -5,7 +5,7 @@ mod common;
 use std::path::Path;
 
 use runcard::pipeline::{CardRequest, Pipeline};
-use runcard::{Error, Variant};
+use runcard::{Error, Theme, Variant};
 use time::macros::{date, datetime};
 use time::OffsetDateTime;
 
@@ -17,12 +17,13 @@ fn ten_k() -> String {
 
 fn request() -> CardRequest {
     CardRequest {
-        runner: "Julia Brandt".into(),
+        runner: "Mara Lindqvist".into(),
         event: None,
         city: None,
         date: None,
         scale: 2.0,
         variant: Variant::default(),
+        theme: Theme::default(),
     }
 }
 
@@ -59,7 +60,7 @@ fn the_png_has_the_card_size_times_the_scale() {
 fn the_svg_shows_the_runner_event_city_and_date_of_the_request() {
     let req = CardRequest {
         event: Some("Spreelauf".into()),
-        city: Some("Berlin".into()),
+        city: Some("Lisbon".into()),
         date: Some(date!(2026 - 05 - 03)),
         ..request()
     };
@@ -67,10 +68,9 @@ fn the_svg_shows_the_runner_event_city_and_date_of_the_request() {
         .unwrap()
         .svg(ten_k().as_bytes(), &req)
         .unwrap();
-    assert!(svg.contains(">JULIA BRANDT</text>"), "{svg}");
+    assert!(svg.contains(">Mara Lindqvist</text>"), "{svg}");
     assert!(svg.contains(">Spreelauf</text>"), "{svg}");
-    assert!(svg.contains("BERLIN"), "{svg}");
-    assert!(svg.contains("MAY 3, 2026"), "{svg}");
+    assert!(svg.contains(">Lisbon \u{b7} 3 May 2026</text>"), "{svg}");
 }
 
 #[test]
@@ -79,8 +79,8 @@ fn without_event_and_date_the_card_takes_the_track_name_and_start_date() {
         .unwrap()
         .svg(ten_k().as_bytes(), &request())
         .unwrap();
-    assert!(svg.contains(">Berlin Marathon</text>"), "{svg}");
-    assert!(svg.contains("SEPTEMBER 27, 2026"), "{svg}");
+    assert!(svg.contains(">Harbour Half</text>"), "{svg}");
+    assert!(svg.contains(">27 September 2026</text>"), "{svg}");
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn render_returns_both_formats_and_the_time_of_each_stage() {
         .unwrap()
         .render(ten_k().as_bytes(), &request())
         .unwrap();
-    assert!(rendered.svg.contains(">JULIA BRANDT</text>"));
+    assert!(rendered.svg.contains(">Mara Lindqvist</text>"));
     assert_eq!(png_size(&rendered.png), (1440, 2000));
     let stages: Vec<&str> = rendered.timings.iter().map(|(stage, _)| *stage).collect();
     assert_eq!(stages, ["parse", "analyze", "layout", "svg", "png"]);
@@ -135,20 +135,21 @@ fn example(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn the_default_request_renders_the_classic_sample_card_unchanged() {
+fn the_default_request_renders_the_ribbon_sample_card_unchanged() {
     let gpx = std::fs::read(example("sample.gpx")).unwrap();
     let req = CardRequest {
-        city: Some("Berlin".into()),
+        city: Some("Lisbon".into()),
         ..request()
     };
     let pipeline = Pipeline::new().unwrap();
-    let classic = CardRequest {
-        variant: Variant::Classic,
+    let ribbon_light = CardRequest {
+        variant: Variant::Ribbon,
+        theme: Theme::Light,
         ..req.clone()
     };
     assert_eq!(
         pipeline.svg(&gpx[..], &req).unwrap(),
-        pipeline.svg(&gpx[..], &classic).unwrap()
+        pipeline.svg(&gpx[..], &ribbon_light).unwrap()
     );
 
     let (width, height, actual) = decode(&pipeline.png(&gpx[..], &req).unwrap());
@@ -166,35 +167,45 @@ fn the_default_request_renders_the_classic_sample_card_unchanged() {
 }
 
 #[test]
-fn noir_takes_the_dark_theme_and_the_dark_palette() {
+fn the_dark_theme_takes_the_dark_paper_glow_and_palette() {
     let pipeline = Pipeline::new().unwrap();
-    let noir = CardRequest {
-        variant: Variant::Noir,
+    let dark = CardRequest {
+        theme: Theme::Dark,
         ..request()
     };
-    let svg = pipeline.svg(ten_k().as_bytes(), &noir).unwrap();
-    assert!(svg.contains("feGaussianBlur"), "{svg}");
+    let svg = pipeline.svg(ten_k().as_bytes(), &dark).unwrap();
     assert!(svg.contains(r##"fill="#0f1115""##), "{svg}");
-    // The slowest swatch of the legend: violet, not the light scale's slate.
-    assert!(svg.contains(r##"fill="#3b2a6b""##), "{svg}");
-    assert!(!svg.contains("#2c4a5e"), "{svg}");
+    assert!(svg.contains("feGaussianBlur"), "{svg}");
+    // The slowest colour of the legend: indigo, not the light scale's ink violet.
+    assert!(svg.contains(r##"fill="#4b3f8a""##), "{svg}");
+    assert!(!svg.contains("#2e2a4f"), "{svg}");
 
-    let classic = pipeline.svg(ten_k().as_bytes(), &request()).unwrap();
-    assert!(classic.contains(r##"fill="#2c4a5e""##), "{classic}");
-    assert!(!classic.contains("#3b2a6b"), "{classic}");
+    let light = pipeline.svg(ten_k().as_bytes(), &request()).unwrap();
+    assert!(light.contains(r##"fill="#f6f6f4""##), "{light}");
+    assert!(light.contains(r##"fill="#2e2a4f""##), "{light}");
+    assert!(!light.contains("#4b3f8a"), "{light}");
+    assert!(!light.contains("feGaussianBlur"), "{light}");
 }
 
 #[test]
-fn every_variant_renders_a_card_of_the_requested_size() {
+fn every_variant_renders_in_both_themes_at_the_requested_size() {
     let pipeline = Pipeline::new().unwrap();
-    for variant in Variant::ALL {
-        let req = CardRequest {
-            variant,
-            scale: 1.0,
-            ..request()
-        };
-        let rendered = pipeline.render(ten_k().as_bytes(), &req).unwrap();
-        assert!(rendered.svg.contains(">JULIA BRANDT</text>"), "{variant}");
-        assert_eq!(png_size(&rendered.png), (720, 1000), "{variant}");
+    for theme in Theme::ALL {
+        for variant in Variant::ALL {
+            let req = CardRequest {
+                variant,
+                theme,
+                scale: 1.0,
+                ..request()
+            };
+            let rendered = pipeline.render(ten_k().as_bytes(), &req).unwrap();
+            let what = format!("{variant} {theme}");
+            let svg = &rendered.svg;
+            assert!(!svg.contains("{{") && !svg.contains("{%"), "{what}: {svg}");
+            assert!(svg.contains(">Mara Lindqvist</text>"), "{what}");
+            let paper = format!(r#"fill="{}""#, theme.tokens().paper);
+            assert!(svg.contains(&paper), "{what}");
+            assert_eq!(png_size(&rendered.png), (720, 1000), "{what}");
+        }
     }
 }

@@ -137,6 +137,7 @@ struct Form {
     scale: Option<String>,
     format: Option<String>,
     variant: Option<String>,
+    theme: Option<String>,
 }
 
 impl Form {
@@ -155,6 +156,7 @@ impl Form {
                 Some("scale") => &mut form.scale,
                 Some("format") => &mut form.format,
                 Some("variant") => &mut form.variant,
+                Some("theme") => &mut form.theme,
                 _ => continue,
             };
             *text = Some(field.text().await?);
@@ -190,6 +192,11 @@ impl Form {
             .transpose()
             .map_err(|e| ApiError::bad_request(format!("invalid variant: {e}")))?
             .unwrap_or_default();
+        let theme = given(self.theme)
+            .map(|theme| theme.parse())
+            .transpose()
+            .map_err(|e| ApiError::bad_request(format!("invalid theme: {e}")))?
+            .unwrap_or_default();
         let request = CardRequest {
             runner,
             event: given(self.event),
@@ -197,6 +204,7 @@ impl Form {
             date,
             scale,
             variant,
+            theme,
         };
         Ok((gpx, request, format))
     }

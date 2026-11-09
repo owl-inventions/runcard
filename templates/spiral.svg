@@ -1,0 +1,17 @@
+{% extends "frame.svg" %}
+{% block viz %}
+{%- if spiral %}
+{%- for segment in spiral.segments %}
+    <path d="{{ segment.path }}" fill="none" stroke="{{ segment.color }}" stroke-width="{{ spiral.stroke_width }}" stroke-linecap="butt" stroke-linejoin="round"/>
+{%- endfor %}
+{%- if spiral.start %}
+    <circle cx="{{ spiral.start.x }}" cy="{{ spiral.start.y }}" r="3" fill="{{ theme.ink }}"/>
+{%- endif %}
+{%- if spiral.finish %}
+    <rect x="{{ spiral.finish.x }}" y="{{ spiral.finish.y }}" width="6" height="6" fill="{{ theme.ink }}"/>
+{%- endif %}
+{%- if spiral.fastest %}
+    <circle cx="{{ spiral.fastest.x }}" cy="{{ spiral.fastest.y }}" r="{{ spiral.fastest.r }}" fill="none" stroke="{{ theme.ink }}" stroke-width="1.5"/>
+{%- endif %}
+{%- endif %}
+{% endblock %}

@@ -9,24 +9,25 @@ use anyhow::{Context, Result};
 use clap::builder::{PossibleValue, PossibleValuesParser, TypedValueParser};
 use clap::Parser;
 use runcard::pipeline::{parse_date, parse_scale, CardRequest, Pipeline};
-use runcard::{Error, Variant};
+use runcard::{Error, Theme, Variant};
 use time::Date;
 
-/// Turns a GPX track into a poster-style PNG card: one coloured stripe per
-/// kilometre, the runner's name, the route outline and the race stats.
+/// Turns a GPX track into a typographic PNG card: the event, the finish time
+/// and the stats around a picture of the kilometre splits, each kilometre
+/// coloured by its pace.
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Args {
     /// The GPX file of the run.
     #[arg(value_name = "INPUT.gpx")]
     input: PathBuf,
-    /// Runner's name, printed in capitals.
+    /// Runner's name, shown as typed.
     #[arg(long, value_name = "NAME")]
     runner: String,
     /// Event name [default: the GPX track name, else "Run"].
     #[arg(long, value_name = "NAME")]
     event: Option<String>,
-    /// City for the header line.
+    /// City for the line under the title.
     #[arg(long, value_name = "CITY")]
     city: Option<String>,
     /// Date of the run [default: the UTC date of the first timestamp, else today].
@@ -39,8 +40,11 @@ struct Args {
     #[arg(long, value_name = "F", default_value_t = 2.0, value_parser = parse_scale)]
     scale: f32,
     /// The card look.
-    #[arg(long, value_name = "NAME", default_value = "classic", value_parser = variant_parser())]
+    #[arg(long, value_name = "NAME", default_value = "ribbon", value_parser = variant_parser())]
     variant: Variant,
+    /// The paper and ink.
+    #[arg(long, value_name = "THEME", default_value = "light", value_parser = theme_parser())]
+    theme: Theme,
     /// Also write the SVG to this path.
     #[arg(long, value_name = "OUT.svg")]
     svg: Option<PathBuf>,
@@ -65,6 +69,7 @@ fn run(args: Args) -> Result<()> {
         date: args.date,
         scale: args.scale,
         variant: args.variant,
+        theme: args.theme,
     };
     let rendered = pipeline
         .render(BufReader::new(file), &request)
@@ -90,6 +95,12 @@ fn variant_parser() -> impl TypedValueParser<Value = Variant> {
         Variant::ALL.map(|variant| PossibleValue::new(variant.name()).help(variant.description())),
     )
     .try_map(|name| name.parse::<Variant>())
+}
+
+/// Accepts `light` and `dark` only.
+fn theme_parser() -> impl TypedValueParser<Value = Theme> {
+    PossibleValuesParser::new(Theme::ALL.map(|theme| PossibleValue::new(theme.name())))
+        .try_map(|name| name.parse::<Theme>())
 }
 
 /// `error` with the pipeline stage it came from as context.

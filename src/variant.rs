@@ -1,68 +1,53 @@
-//! The card variants: six looks for the same card data, one template each.
+//! The card variants: six encodings of the same splits inside the shared
+//! frame, one template and one layout module each.
 
 use std::fmt;
 use std::str::FromStr;
-
-use crate::model::Theme;
 
 /// A card look, selected by its lowercase name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Variant {
     #[default]
-    Classic,
-    Noir,
-    Rings,
-    Route,
-    Bars,
-    Mosaic,
+    Ribbon,
+    Spiral,
+    Trail,
+    Dots,
+    Wave,
+    Ledger,
 }
 
 impl Variant {
     /// Every variant in display order, the default first.
     pub const ALL: [Variant; 6] = [
-        Self::Classic,
-        Self::Noir,
-        Self::Rings,
-        Self::Route,
-        Self::Bars,
-        Self::Mosaic,
+        Self::Ribbon,
+        Self::Spiral,
+        Self::Trail,
+        Self::Dots,
+        Self::Wave,
+        Self::Ledger,
     ];
 
     /// The lowercase name: the CLI value, the form value and the template name.
     pub fn name(self) -> &'static str {
         match self {
-            Self::Classic => "classic",
-            Self::Noir => "noir",
-            Self::Rings => "rings",
-            Self::Route => "route",
-            Self::Bars => "bars",
-            Self::Mosaic => "mosaic",
+            Self::Ribbon => "ribbon",
+            Self::Spiral => "spiral",
+            Self::Trail => "trail",
+            Self::Dots => "dots",
+            Self::Wave => "wave",
+            Self::Ledger => "ledger",
         }
     }
 
-    /// One sentence on how the variant looks.
+    /// One sentence on what the variant draws.
     pub fn description(self) -> &'static str {
         match self {
-            Self::Classic => "One coloured stripe per kilometre on cream paper, slate blue for slow to orange for fast.",
-            Self::Noir => "The classic stripes on a near-black card with a soft glow.",
-            Self::Rings => "The kilometres as a ring of coloured segments around the finish time.",
-            Self::Route => "The route drawn large, each kilometre in its pace colour.",
-            Self::Bars => "A speed chart with one bar per kilometre and a dashed average line.",
-            Self::Mosaic => "One tile per kilometre in a calendar-like grid, each with its pace.",
-        }
-    }
-
-    /// Whether the variant is set on the dark theme with the dark palette.
-    pub fn is_dark(self) -> bool {
-        self == Self::Noir
-    }
-
-    /// The paper, ink, muted and accent colours of the variant.
-    pub fn theme(self) -> Theme {
-        if self.is_dark() {
-            Theme::dark()
-        } else {
-            Theme::light()
+            Self::Ribbon => "One bar per kilometre, longer and brighter the faster it was run.",
+            Self::Spiral => "The kilometres wound outward from the centre as one coloured spiral.",
+            Self::Trail => "The route itself, each kilometre drawn in the colour of its pace.",
+            Self::Dots => "A grid of dots, one per kilometre, larger for the faster ones.",
+            Self::Wave => "The pace as a smooth curve over the distance, rising when faster.",
+            Self::Ledger => "The splits as a table of figures, each pace set in its colour.",
         }
     }
 }
@@ -91,14 +76,24 @@ impl FromStr for Variant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Theme;
 
-    const NAMES: [&str; 6] = ["classic", "noir", "rings", "route", "bars", "mosaic"];
+    const NAMES: [&str; 6] = ["ribbon", "spiral", "trail", "dots", "wave", "ledger"];
 
     #[test]
     fn all_lists_the_variants_in_display_order_with_their_names() {
         let names: Vec<&str> = Variant::ALL.iter().map(|v| v.name()).collect();
         assert_eq!(names, NAMES);
+        assert_eq!(
+            Variant::ALL,
+            [
+                Variant::Ribbon,
+                Variant::Spiral,
+                Variant::Trail,
+                Variant::Dots,
+                Variant::Wave,
+                Variant::Ledger,
+            ]
+        );
     }
 
     #[test]
@@ -106,7 +101,6 @@ mod tests {
         for (variant, name) in Variant::ALL.into_iter().zip(NAMES) {
             assert_eq!(name.parse::<Variant>(), Ok(variant), "{name}");
             assert_eq!(variant.to_string(), name);
-            assert_eq!(variant.to_string().parse::<Variant>(), Ok(variant));
         }
     }
 
@@ -114,20 +108,20 @@ mod tests {
     fn an_unknown_or_capitalised_name_is_an_error_listing_the_names() {
         assert_eq!(
             "x".parse::<Variant>(),
-            Err(r#"expected one of classic, noir, rings, route, bars, mosaic, got "x""#.to_owned())
+            Err(r#"expected one of ribbon, spiral, trail, dots, wave, ledger, got "x""#.to_owned())
         );
-        for name in ["Noir", "NOIR", " noir", ""] {
+        for name in ["Ribbon", "WAVE", " dots", "", "classic"] {
             assert!(name.parse::<Variant>().is_err(), "{name:?} was accepted");
         }
     }
 
     #[test]
-    fn classic_is_the_default() {
-        assert_eq!(Variant::default(), Variant::Classic);
+    fn ribbon_is_the_default() {
+        assert_eq!(Variant::default(), Variant::Ribbon);
     }
 
     #[test]
-    fn every_variant_has_a_one_sentence_description() {
+    fn every_variant_has_a_short_one_sentence_description() {
         for variant in Variant::ALL {
             let description = variant.description();
             assert!(
@@ -138,16 +132,7 @@ mod tests {
                 description.starts_with(char::is_uppercase),
                 "{variant}: {description:?}"
             );
-        }
-    }
-
-    #[test]
-    fn noir_is_dark_and_every_other_variant_light() {
-        for variant in Variant::ALL {
-            let dark = variant == Variant::Noir;
-            assert_eq!(variant.is_dark(), dark, "{variant}");
-            let expected = if dark { Theme::dark() } else { Theme::light() };
-            assert_eq!(variant.theme(), expected, "{variant}");
+            assert!(description.len() <= 80, "{variant}: {description:?}");
         }
     }
 }

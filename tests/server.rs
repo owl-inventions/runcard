@@ -64,7 +64,7 @@ fn start() -> time::OffsetDateTime {
     time::macros::datetime!(2026-09-27 09:00:00 UTC)
 }
 
-/// A 5 km synthetic run named "Berlin Marathon", starting on 27 September 2026.
+/// A 5 km synthetic run named "Harbour Half", starting on 27 September 2026.
 fn five_k() -> String {
     common::synthetic_gpx(5_000.0, |_| 300.0, start())
 }
@@ -107,8 +107,8 @@ async fn a_gpx_upload_comes_back_as_a_png_card_at_the_default_scale() {
     let gpx = five_k();
     let request = post_cards(&[
         ("gpx", &gpx),
-        ("runner", "Julia Brandt"),
-        ("city", "Berlin"),
+        ("runner", "Mara Lindqvist"),
+        ("city", "Lisbon"),
     ]);
     let (status, headers, body) = send(app(), request).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
@@ -122,9 +122,13 @@ async fn a_gpx_upload_comes_back_as_a_png_card_at_the_default_scale() {
 }
 
 #[tokio::test]
-async fn format_svg_returns_the_svg_with_the_runner_in_capitals() {
+async fn format_svg_returns_the_svg_with_the_runner_as_typed() {
     let gpx = five_k();
-    let request = post_cards(&[("gpx", &gpx), ("runner", "Julia Brandt"), ("format", "svg")]);
+    let request = post_cards(&[
+        ("gpx", &gpx),
+        ("runner", "Mara Lindqvist"),
+        ("format", "svg"),
+    ]);
     let (status, headers, body) = send(app(), request).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     assert_eq!(content_type(&headers), "image/svg+xml; charset=utf-8");
@@ -133,13 +137,13 @@ async fn format_svg_returns_the_svg_with_the_runner_in_capitals() {
         "inline; filename=\"card.svg\""
     );
     let svg = String::from_utf8(body.to_vec()).expect("utf-8 svg");
-    assert!(svg.contains(">JULIA BRANDT</text>"), "{svg}");
+    assert!(svg.contains(">Mara Lindqvist</text>"), "{svg}");
 }
 
 #[tokio::test]
 async fn the_scale_part_sets_the_png_size() {
     let gpx = five_k();
-    let request = post_cards(&[("gpx", &gpx), ("runner", "Julia Brandt"), ("scale", "1")]);
+    let request = post_cards(&[("gpx", &gpx), ("runner", "Mara Lindqvist"), ("scale", "1")]);
     let (status, _, body) = send(app(), request).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     assert_eq!(png_size(&body), (720, 1000));
@@ -150,9 +154,9 @@ async fn the_event_city_and_date_parts_reach_the_card() {
     let gpx = five_k();
     let request = post_cards(&[
         ("gpx", &gpx),
-        ("runner", "Julia Brandt"),
+        ("runner", "Mara Lindqvist"),
         ("event", "Spreelauf"),
-        ("city", "Berlin"),
+        ("city", "Lisbon"),
         ("date", "2026-05-03"),
         ("format", "svg"),
     ]);
@@ -160,8 +164,7 @@ async fn the_event_city_and_date_parts_reach_the_card() {
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let svg = String::from_utf8(body.to_vec()).unwrap();
     assert!(svg.contains(">Spreelauf</text>"), "{svg}");
-    assert!(svg.contains("BERLIN"), "{svg}");
-    assert!(svg.contains("MAY 3, 2026"), "{svg}");
+    assert!(svg.contains(">Lisbon \u{b7} 3 May 2026</text>"), "{svg}");
 }
 
 #[tokio::test]
@@ -169,23 +172,48 @@ async fn empty_optional_parts_count_as_not_given_and_unknown_parts_are_ignored()
     let gpx = five_k();
     let request = post_cards(&[
         ("gpx", &gpx),
-        ("runner", "  Julia Brandt "),
+        ("runner", "  Mara Lindqvist "),
         ("event", ""),
         ("city", " "),
         ("date", ""),
         ("scale", ""),
         ("format", "svg"),
         ("variant", " "),
+        ("theme", ""),
         ("colour", "pink"),
     ]);
     let (status, _, body) = send(app(), request).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let svg = String::from_utf8(body.to_vec()).unwrap();
-    assert!(svg.contains(r##"fill="#f4efe6""##), "not classic: {svg}");
-    assert!(svg.contains(">JULIA BRANDT</text>"), "{svg}");
-    assert!(svg.contains(">Berlin Marathon</text>"), "{svg}");
-    assert!(svg.contains("SEPTEMBER 27, 2026"), "{svg}");
-    assert!(svg.contains(">RUN</text>"), "{svg}");
+    let ribbon_light = svg_card(&[("variant", "ribbon"), ("theme", "light")]).await;
+    assert_eq!(svg, ribbon_light, "not the default ribbon on light paper");
+    assert!(svg.contains(r##"fill="#f6f6f4""##), "not light: {svg}");
+    assert!(svg.contains(">Mara Lindqvist</text>"), "{svg}");
+    assert!(svg.contains(">Harbour Half</text>"), "{svg}");
+    assert!(svg.contains(">27 September 2026</text>"), "{svg}");
+}
+
+/// The SVG card for the five kilometres with `parts` besides gpx, runner and format.
+async fn svg_card(parts: &[(&str, &str)]) -> String {
+    let gpx = five_k();
+    let mut all = vec![
+        ("gpx", gpx.as_str()),
+        ("runner", "Mara Lindqvist"),
+        ("format", "svg"),
+    ];
+    all.extend_from_slice(parts);
+    let (status, _, body) = send(app(), post_cards(&all)).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    String::from_utf8(body.to_vec()).expect("utf-8 svg")
+}
+
+/// The RGB colour of the top-left pixel of a PNG.
+fn top_left(png_bytes: &[u8]) -> [u8; 3] {
+    let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
+    let mut reader = decoder.read_info().expect("a valid png header");
+    let mut buf = vec![0; reader.output_buffer_size().expect("a sane png size")];
+    reader.next_frame(&mut buf).expect("a valid png frame");
+    [buf[0], buf[1], buf[2]]
 }
 
 /// Asserts a JSON error answer with `status` and returns its message.
@@ -202,8 +230,8 @@ async fn error_of(app: Router, request: Request<Body>, status: StatusCode) -> St
 #[tokio::test]
 async fn a_missing_or_empty_gpx_part_is_a_bad_request() {
     for parts in [
-        vec![("runner", "Julia Brandt")],
-        vec![("gpx", ""), ("runner", "Julia Brandt")],
+        vec![("runner", "Mara Lindqvist")],
+        vec![("gpx", ""), ("runner", "Mara Lindqvist")],
     ] {
         let message = error_of(app(), post_cards(&parts), StatusCode::BAD_REQUEST).await;
         assert_eq!(message, "gpx is missing or empty", "{parts:?}");
@@ -227,7 +255,7 @@ async fn an_invalid_date_is_a_bad_request() {
     let gpx = five_k();
     let request = post_cards(&[
         ("gpx", &gpx),
-        ("runner", "Julia Brandt"),
+        ("runner", "Mara Lindqvist"),
         ("date", "2026-13-01"),
     ]);
     let message = error_of(app(), request, StatusCode::BAD_REQUEST).await;
@@ -241,11 +269,15 @@ async fn an_invalid_date_is_a_bad_request() {
 async fn a_scale_that_is_not_above_0_and_at_most_8_is_a_bad_request() {
     let gpx = five_k();
     for scale in ["0", "9", "-1", "abc", "NaN", "inf"] {
-        let request = post_cards(&[("gpx", &gpx), ("runner", "Julia Brandt"), ("scale", scale)]);
+        let request = post_cards(&[
+            ("gpx", &gpx),
+            ("runner", "Mara Lindqvist"),
+            ("scale", scale),
+        ]);
         let message = error_of(app(), request, StatusCode::BAD_REQUEST).await;
         assert!(message.starts_with("invalid scale: "), "{scale}: {message}");
     }
-    let request = post_cards(&[("gpx", &gpx), ("runner", "Julia Brandt"), ("scale", "9")]);
+    let request = post_cards(&[("gpx", &gpx), ("runner", "Mara Lindqvist"), ("scale", "9")]);
     let message = error_of(app(), request, StatusCode::BAD_REQUEST).await;
     assert_eq!(message, "invalid scale: must be at most 8, got 9");
 }
@@ -255,7 +287,7 @@ async fn a_format_other_than_png_or_svg_is_a_bad_request() {
     let gpx = five_k();
     let request = post_cards(&[
         ("gpx", &gpx),
-        ("runner", "Julia Brandt"),
+        ("runner", "Mara Lindqvist"),
         ("format", "jpeg"),
     ]);
     let message = error_of(app(), request, StatusCode::BAD_REQUEST).await;
@@ -267,8 +299,8 @@ async fn the_variant_part_picks_the_card_look() {
     let gpx = five_k();
     let request = post_cards(&[
         ("gpx", &gpx),
-        ("runner", "Julia Brandt"),
-        ("variant", "noir"),
+        ("runner", "Mara Lindqvist"),
+        ("variant", "spiral"),
         ("scale", "1"),
     ]);
     let (status, headers, body) = send(app(), request).await;
@@ -277,17 +309,48 @@ async fn the_variant_part_picks_the_card_look() {
     assert!(body.starts_with(PNG_SIGNATURE));
     assert_eq!(png_size(&body), (720, 1000));
 
+    let ribbon = svg_card(&[("variant", "ribbon")]).await;
+    for variant in ["spiral", "trail", "dots", "wave", "ledger"] {
+        let svg = svg_card(&[("variant", variant)]).await;
+        assert_ne!(svg, ribbon, "{variant} renders the ribbon");
+    }
+}
+
+#[tokio::test]
+async fn the_theme_part_dark_answers_a_card_on_dark_paper() {
+    let gpx = five_k();
     let request = post_cards(&[
         ("gpx", &gpx),
-        ("runner", "Julia Brandt"),
-        ("variant", "noir"),
-        ("format", "svg"),
+        ("runner", "Mara Lindqvist"),
+        ("theme", "dark"),
+        ("scale", "1"),
     ]);
-    let (status, _, body) = send(app(), request).await;
+    let (status, headers, body) = send(app(), request).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-    let svg = String::from_utf8(body.to_vec()).unwrap();
-    assert!(svg.contains("feGaussianBlur"), "{svg}");
+    assert_eq!(content_type(&headers), "image/png");
+    assert_eq!(png_size(&body), (720, 1000));
+    assert_eq!(top_left(&body), [0x0f, 0x11, 0x15]);
+
+    let svg = svg_card(&[("theme", "dark")]).await;
     assert!(svg.contains(r##"fill="#0f1115""##), "{svg}");
+    assert!(svg.contains("feGaussianBlur"), "{svg}");
+    let light = svg_card(&[("theme", "light")]).await;
+    assert!(!light.contains("feGaussianBlur"), "{light}");
+}
+
+#[tokio::test]
+async fn an_unknown_theme_is_a_bad_request_naming_both_themes() {
+    let gpx = five_k();
+    let request = post_cards(&[
+        ("gpx", &gpx),
+        ("runner", "Mara Lindqvist"),
+        ("theme", "nope"),
+    ]);
+    let message = error_of(app(), request, StatusCode::BAD_REQUEST).await;
+    assert_eq!(
+        message,
+        r#"invalid theme: expected light or dark, got "nope""#
+    );
 }
 
 #[tokio::test]
@@ -295,13 +358,13 @@ async fn an_unknown_variant_is_a_bad_request_listing_the_variants() {
     let gpx = five_k();
     let request = post_cards(&[
         ("gpx", &gpx),
-        ("runner", "Julia Brandt"),
+        ("runner", "Mara Lindqvist"),
         ("variant", "nope"),
     ]);
     let message = error_of(app(), request, StatusCode::BAD_REQUEST).await;
     assert_eq!(
         message,
-        r#"invalid variant: expected one of classic, noir, rings, route, bars, mosaic, got "nope""#
+        r#"invalid variant: expected one of ribbon, spiral, trail, dots, wave, ledger, got "nope""#
     );
 }
 
@@ -312,7 +375,7 @@ async fn variants_lists_every_variant_in_display_order() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type(&headers), "application/json");
     assert!(
-        body.starts_with(br#"[{"name":"classic","description":""#),
+        body.starts_with(br#"[{"name":"ribbon","description":""#),
         "{}",
         String::from_utf8_lossy(&body)
     );
@@ -329,7 +392,7 @@ async fn variants_lists_every_variant_in_display_order() {
         .collect();
     assert_eq!(
         names,
-        ["classic", "noir", "rings", "route", "bars", "mosaic"]
+        ["ribbon", "spiral", "trail", "dots", "wave", "ledger"]
     );
 }
 
@@ -339,14 +402,14 @@ async fn a_gpx_without_timestamps_is_a_bad_request_with_the_pipeline_message() {
 <gpx version="1.1" creator="runcard-tests" xmlns="http://www.topografix.com/GPX/1/1">
 <trk><trkseg><trkpt lat="52.5" lon="13.4"/><trkpt lat="52.51" lon="13.41"/></trkseg></trk>
 </gpx>"#;
-    let request = post_cards(&[("gpx", gpx), ("runner", "Julia Brandt")]);
+    let request = post_cards(&[("gpx", gpx), ("runner", "Mara Lindqvist")]);
     let message = error_of(app(), request, StatusCode::BAD_REQUEST).await;
     assert_eq!(message, "track has no timestamps, pace cannot be derived");
 }
 
 #[tokio::test]
 async fn malformed_gpx_is_a_bad_request() {
-    let request = post_cards(&[("gpx", "<gpx><trk>"), ("runner", "Julia Brandt")]);
+    let request = post_cards(&[("gpx", "<gpx><trk>"), ("runner", "Mara Lindqvist")]);
     let message = error_of(app(), request, StatusCode::BAD_REQUEST).await;
     assert!(message.starts_with("invalid gpx: "), "{message}");
 }
@@ -368,11 +431,11 @@ async fn a_body_that_is_not_multipart_is_an_unsupported_media_type() {
 async fn a_malformed_multipart_body_is_a_bad_request() {
     let without_boundary = Request::post("/cards")
         .header(header::CONTENT_TYPE, "multipart/form-data")
-        .body(Body::from(multipart(&[("runner", "Julia Brandt")])))
+        .body(Body::from(multipart(&[("runner", "Mara Lindqvist")])))
         .unwrap();
     error_of(app(), without_boundary, StatusCode::BAD_REQUEST).await;
 
-    let mut cut_off = multipart(&[("runner", "Julia Brandt")]);
+    let mut cut_off = multipart(&[("runner", "Mara Lindqvist")]);
     cut_off.truncate(cut_off.len() - 12);
     let cut_off = Request::post("/cards")
         .header(
@@ -391,7 +454,7 @@ async fn a_body_above_the_limit_is_too_large() {
         ..Config::default()
     });
     let gpx = five_k();
-    let request = post_cards(&[("gpx", &gpx), ("runner", "Julia Brandt")]);
+    let request = post_cards(&[("gpx", &gpx), ("runner", "Mara Lindqvist")]);
     error_of(app, request, StatusCode::PAYLOAD_TOO_LARGE).await;
 }
 

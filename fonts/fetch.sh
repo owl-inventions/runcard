@@ -11,9 +11,7 @@ fetch() {
   curl -fsSL "$url" -o "$out"
 }
 
-fetch "$base/ibmplexmono/IBMPlexMono-Medium.ttf" IBMPlexMono-Medium.ttf
-fetch "$base/fraunces/Fraunces%5BSOFT%2CWONK%2Copsz%2Cwght%5D.ttf" Fraunces-Variable.ttf
-fetch "$base/bebasneue/BebasNeue-Regular.ttf" BebasNeue-Regular.ttf
-fetch "$base/ibmplexmono/OFL.txt" OFL-IBMPlexMono.txt
-fetch "$base/fraunces/OFL.txt" OFL-Fraunces.txt
-fetch "$base/bebasneue/OFL.txt" OFL-BebasNeue.txt
+fetch "$base/archivo/Archivo%5Bwdth%2Cwght%5D.ttf" Archivo-Variable.ttf
+fetch "$base/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf" JetBrainsMono-Variable.ttf
+fetch "$base/archivo/OFL.txt" OFL-Archivo.txt
+fetch "$base/jetbrainsmono/OFL.txt" OFL-JetBrainsMono.txt
