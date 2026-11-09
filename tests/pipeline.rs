@@ -93,6 +93,18 @@ fn render_returns_both_formats_and_the_time_of_each_stage() {
     assert_eq!(png_size(&rendered.png), (1440, 2000));
     let stages: Vec<&str> = rendered.timings.iter().map(|(stage, _)| *stage).collect();
     assert_eq!(stages, ["parse", "analyze", "layout", "svg", "png"]);
+    assert_eq!(rendered.splits, 10);
+}
+
+#[test]
+fn render_svg_returns_the_svg_the_splits_and_the_time_of_each_svg_stage() {
+    let pipeline = Pipeline::new().unwrap();
+    let rendered = pipeline.render_svg(ten_k().as_bytes(), &request()).unwrap();
+    let svg = pipeline.svg(ten_k().as_bytes(), &request()).unwrap();
+    assert_eq!(rendered.svg, svg);
+    assert_eq!(rendered.splits, 10);
+    let stages: Vec<&str> = rendered.timings.iter().map(|(stage, _)| *stage).collect();
+    assert_eq!(stages, ["parse", "analyze", "layout", "svg"]);
 }
 
 #[test]

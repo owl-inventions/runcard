@@ -1,21 +1,32 @@
 //! The HTTP API: `POST /cards` renders an uploaded GPX track as a card,
 //! `GET /variants` lists the card looks, `GET /health` answers that the
 //! server is up.
+//!
+//! Every answer carries an `x-request-id`, the client's own or a new UUID.
+//! Each answer except `/health` is logged as one `request` event (target
+//! `runcard::http`), and each rendered card as one `card rendered` event
+//! (target `runcard::cards`); both, and the errors of a failed render, carry
+//! the request id.
 
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::multipart::{Multipart, MultipartError, MultipartRejection};
-use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use serde::Serialize;
 use serde_json::{json, Value};
+use tokio::task::JoinError;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::trace::TraceLayer;
+use tower_http::request_id::{
+    MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
 
 use crate::error::Error;
 use crate::pipeline::{parse_date, parse_scale, CardRequest, Pipeline};
@@ -23,6 +34,8 @@ use crate::variant::Variant;
 
 /// The request body limit unless configured otherwise: 20 MiB.
 pub const DEFAULT_MAX_BODY: usize = 20 * 1024 * 1024;
+/// The header that carries the request id.
+const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 /// The largest raster scale a request may ask for (a 5760x8000 PNG).
 pub const MAX_SCALE: f32 = 8.0;
 /// The raster scale when the request names none (a 1440x2000 PNG).
@@ -50,19 +63,60 @@ impl Default for Config {
 /// The API's routes and layers around the shared `pipeline`.
 pub fn router(pipeline: Arc<Pipeline>, config: &Config) -> Router {
     let router = Router::new()
-        .route("/health", get(health))
         .route("/variants", get(variants))
         .route("/cards", post(create_card))
+        // Logs the routes above and the 404 and 405 answers; `/health`,
+        // added after it, stays out of the log the probes would fill.
+        .layer(middleware::from_fn(log_request))
+        .route("/health", get(health))
         .with_state(pipeline)
         .layer(DefaultBodyLimit::max(config.max_body));
     let router = match cors(&config.allow_origins) {
         Some(cors) => router.layer(cors),
         None => router,
     };
-    router.layer(TraceLayer::new_for_http())
+    // The outer layer keeps the client's `x-request-id` or sets a new UUID,
+    // the inner one copies it onto the answer.
+    router
+        .layer(PropagateRequestIdLayer::x_request_id())
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
 }
 
-/// CORS for the listed origins, any origin if one of them is `*`, none without origins.
+/// Logs the answer to `request` as one `request` event: method, path,
+/// status, latency in milliseconds and the request id.
+async fn log_request(request: Request, next: Next) -> Response {
+    let started = Instant::now();
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let request_id = id_text(request.extensions().get::<RequestId>());
+    let response = next.run(request).await;
+    tracing::info!(
+        target: "runcard::http",
+        method = method.as_str(),
+        path,
+        status = response.status().as_u16(),
+        latency_ms = millis(started.elapsed()),
+        request_id,
+        "request"
+    );
+    response
+}
+
+/// The request id as text; empty without one or when it is not visible ASCII.
+fn id_text(id: Option<&RequestId>) -> String {
+    id.and_then(|id| id.header_value().to_str().ok())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// `duration` in milliseconds, rounded to a tenth.
+fn millis(duration: Duration) -> f64 {
+    (duration.as_secs_f64() * 10_000.0).round() / 10.0
+}
+
+/// CORS for the listed origins, any origin if one of them is `*`, none without
+/// origins. The browser may read `x-request-id` (the permissive `*` exposes
+/// every header).
 fn cors(origins: &[HeaderValue]) -> Option<CorsLayer> {
     if origins.is_empty() {
         None
@@ -73,7 +127,8 @@ fn cors(origins: &[HeaderValue]) -> Option<CorsLayer> {
             CorsLayer::new()
                 .allow_methods([Method::GET, Method::POST])
                 .allow_headers(Any)
-                .allow_origin(origins.to_vec()),
+                .allow_origin(origins.to_vec())
+                .expose_headers([X_REQUEST_ID]),
         )
     }
 }
@@ -105,8 +160,10 @@ async fn variants() -> Json<Vec<VariantInfo>> {
 /// Renders the uploaded GPX track as a card, off the async runtime.
 async fn create_card(
     State(pipeline): State<Arc<Pipeline>>,
+    request_id: Option<Extension<RequestId>>,
     multipart: Result<Option<Multipart>, MultipartRejection>,
 ) -> Result<Card, ApiError> {
+    let request_id = id_text(request_id.as_deref());
     let multipart = multipart?.ok_or_else(|| {
         ApiError::new(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -114,16 +171,30 @@ async fn create_card(
         )
     })?;
     let (gpx, request, format) = Form::read(multipart).await?.into_request()?;
-    tokio::task::spawn_blocking(move || match format {
-        Format::Png => pipeline.png(&gpx[..], &request).map(Card::Png),
-        Format::Svg => pipeline.svg(&gpx[..], &request).map(Card::Svg),
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "the card task did not finish");
-        ApiError::internal()
-    })?
-    .map_err(ApiError::from)
+    let (variant, theme, scale) = (request.variant, request.theme, request.scale);
+    let rendered = tokio::task::spawn_blocking(move || format.render(&pipeline, &gpx, &request))
+        .await
+        .map_err(|error| ApiError::from_task(&error, &request_id))?
+        .map_err(|error| ApiError::from_render(error, &request_id))?;
+    tracing::info!(
+        target: "runcard::cards",
+        variant = variant.name(),
+        theme = theme.name(),
+        format = format.name(),
+        scale = widen(scale),
+        splits = rendered.splits,
+        bytes = rendered.card.len(),
+        render_ms = millis(rendered.time),
+        request_id,
+        "card rendered"
+    );
+    Ok(rendered.card)
+}
+
+/// `scale` as the `f64` with the same digits: `0.3` stays `0.3` in the log
+/// instead of becoming `0.30000001192092896`.
+fn widen(scale: f32) -> f64 {
+    scale.to_string().parse().unwrap_or(f64::from(scale))
 }
 
 /// The parts of a `POST /cards` form as sent; unknown parts are skipped.
@@ -233,6 +304,47 @@ enum Format {
     Svg,
 }
 
+impl Format {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Svg => "svg",
+        }
+    }
+
+    /// The card in this format, with its splits and the pipeline's time.
+    fn render(
+        self,
+        pipeline: &Pipeline,
+        gpx: &[u8],
+        request: &CardRequest,
+    ) -> Result<RenderedCard, Error> {
+        Ok(match self {
+            Self::Png => {
+                let rendered = pipeline.render(gpx, request)?;
+                RenderedCard {
+                    card: Card::Png(rendered.png),
+                    splits: rendered.splits,
+                    time: total(&rendered.timings),
+                }
+            }
+            Self::Svg => {
+                let rendered = pipeline.render_svg(gpx, request)?;
+                RenderedCard {
+                    card: Card::Svg(rendered.svg),
+                    splits: rendered.splits,
+                    time: total(&rendered.timings),
+                }
+            }
+        })
+    }
+}
+
+/// The sum of the stage times.
+fn total(timings: &[(&'static str, Duration)]) -> Duration {
+    timings.iter().map(|(_, time)| *time).sum()
+}
+
 impl FromStr for Format {
     type Err = String;
 
@@ -249,6 +361,24 @@ impl FromStr for Format {
 enum Card {
     Png(Vec<u8>),
     Svg(String),
+}
+
+impl Card {
+    /// The size of the answer body in bytes.
+    fn len(&self) -> usize {
+        match self {
+            Card::Png(png) => png.len(),
+            Card::Svg(svg) => svg.len(),
+        }
+    }
+}
+
+/// A card and what the pipeline measured while rendering it.
+struct RenderedCard {
+    card: Card,
+    splits: usize,
+    /// The time of all pipeline stages together.
+    time: Duration,
 }
 
 impl IntoResponse for Card {
@@ -297,18 +427,11 @@ impl ApiError {
     fn internal() -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "rendering failed")
     }
-}
 
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": self.message }))).into_response()
-    }
-}
-
-/// Faults in the uploaded track are the client's; everything after the
-/// layout is the server's.
-impl From<Error> for ApiError {
-    fn from(error: Error) -> Self {
+    /// The answer to a pipeline `error`. Faults in the uploaded track are the
+    /// client's (400 with the pipeline's message); everything after the layout
+    /// is the server's (500, the details logged at ERROR with `request_id`).
+    fn from_render(error: Error, request_id: &str) -> Self {
         match error {
             Error::Gpx(_)
             | Error::TooFewPoints
@@ -317,10 +440,23 @@ impl From<Error> for ApiError {
             | Error::TimeNotMonotonic { .. }
             | Error::TooShort => Self::bad_request(error.to_string()),
             Error::Template(_) | Error::Svg(_) | Error::Png(_) | Error::Io(_) => {
-                tracing::error!(%error, "rendering failed");
+                tracing::error!(request_id, %error, "rendering failed");
                 Self::internal()
             }
         }
+    }
+
+    /// The answer to a card task that panicked or was cancelled: a 500, the
+    /// details logged at ERROR with `request_id`.
+    fn from_task(error: &JoinError, request_id: &str) -> Self {
+        tracing::error!(request_id, %error, "the card task did not finish");
+        Self::internal()
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, Json(json!({ "error": self.message }))).into_response()
     }
 }
 
@@ -342,26 +478,108 @@ mod tests {
     use super::*;
     use crate::Error;
     use axum::http::StatusCode;
+    use std::io;
+    use std::sync::Mutex;
+
+    /// Everything the log writer received.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// What `f` returns and the JSON lines it logged.
+    fn logged<T>(f: impl FnOnce() -> T) -> (T, Vec<Value>) {
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_current_span(false)
+            .with_span_list(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let result = tracing::subscriber::with_default(subscriber, f);
+        let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        let lines = log
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a json log line"))
+            .collect();
+        (result, lines)
+    }
 
     #[test]
-    fn render_errors_are_internal_and_keep_their_details_to_the_log() {
-        for error in [
-            Error::Svg("cannot rasterise at 0x0".into()),
-            Error::Io(std::io::Error::other("disk full")),
+    fn render_errors_are_internal_and_logged_with_the_request_id() {
+        for (error, details) in [
+            (
+                Error::Svg("cannot rasterise at 0x0".into()),
+                "cannot rasterise at 0x0",
+            ),
+            (Error::Io(io::Error::other("disk full")), "disk full"),
         ] {
-            let api = ApiError::from(error);
+            let (api, lines) = logged(|| ApiError::from_render(error, "abc"));
             assert_eq!(api.status, StatusCode::INTERNAL_SERVER_ERROR);
             assert_eq!(api.message, "rendering failed");
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            let line = &lines[0];
+            assert_eq!(line["level"], "ERROR");
+            assert_eq!(line["message"], "rendering failed");
+            assert_eq!(line["request_id"], "abc");
+            assert!(line["error"].as_str().unwrap().contains(details), "{line}");
         }
     }
 
     #[test]
-    fn track_errors_are_bad_requests_with_the_pipeline_message() {
-        let api = ApiError::from(Error::TimeNotMonotonic { index: 4 });
+    fn track_errors_are_bad_requests_with_the_pipeline_message_and_not_logged() {
+        let (api, lines) =
+            logged(|| ApiError::from_render(Error::TimeNotMonotonic { index: 4 }, "abc"));
         assert_eq!(api.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             api.message,
             "timestamp at point 4 is earlier than the previous one"
         );
+        assert!(lines.is_empty(), "{lines:?}");
+    }
+
+    #[tokio::test]
+    async fn a_card_task_that_did_not_finish_is_internal_and_logged_with_the_request_id() {
+        let task = tokio::spawn(std::future::pending::<()>());
+        task.abort();
+        let error = task.await.unwrap_err();
+        let (api, lines) = logged(|| ApiError::from_task(&error, "abc"));
+        assert_eq!(api.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(api.message, "rendering failed");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let line = &lines[0];
+        assert_eq!(line["level"], "ERROR");
+        assert_eq!(line["message"], "the card task did not finish");
+        assert_eq!(line["request_id"], "abc");
+        assert!(
+            line["error"].as_str().unwrap().contains("cancelled"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn latencies_are_milliseconds_rounded_to_a_tenth() {
+        assert_eq!(millis(Duration::ZERO), 0.0);
+        assert_eq!(millis(Duration::from_micros(1_234)), 1.2);
+        assert_eq!(millis(Duration::from_micros(1_276)), 1.3);
+        assert_eq!(millis(Duration::from_secs(2)), 2000.0);
+    }
+
+    #[test]
+    fn a_scale_keeps_its_decimal_digits_as_f64() {
+        assert_eq!(widen(0.3), 0.3);
+        assert_eq!(widen(2.0), 2.0);
+        assert_eq!(widen(1.25), 1.25);
     }
 }

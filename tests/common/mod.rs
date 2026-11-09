@@ -1,6 +1,8 @@
 //! Synthetic GPX fixtures shared by the integration tests.
 #![allow(dead_code)]
 
+pub mod http;
+
 use std::f64::consts::{FRAC_PI_2, PI};
 use std::fmt::Write as _;
 use std::path::PathBuf;

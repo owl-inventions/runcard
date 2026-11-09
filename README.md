@@ -65,7 +65,7 @@ the colours brighter and the picture glowing:
 unchanged.
 
 ```
-runcard-server [--bind <ADDR>] [--allow-origin <ORIGIN>]... [--max-body-mib <N>]
+runcard-server [--bind <ADDR>] [--allow-origin <ORIGIN>]... [--max-body-mib <N>] [--log-format <FORMAT>]
 ```
 
 | Flag | Environment | Meaning |
@@ -73,11 +73,13 @@ runcard-server [--bind <ADDR>] [--allow-origin <ORIGIN>]... [--max-body-mib <N>]
 | `--bind <ADDR>` | `RUNCARD_BIND` | Address to listen on. Default: `0.0.0.0:8080`. |
 | `--allow-origin <ORIGIN>` | `RUNCARD_ALLOW_ORIGIN` | Origin a browser may call the API from, repeatable (comma separated in the environment); `*` allows any. Default: none, and no CORS headers. |
 | `--max-body-mib <N>` | `RUNCARD_MAX_BODY_MIB` | Largest request body in MiB. Default: `20`. |
+| `--log-format <FORMAT>` | `RUNCARD_LOG_FORMAT` | `json`, `text` or `auto`: JSON lines when stderr is not a terminal (a container, a pipe), text when it is. Default: `auto`. |
 
-The server logs to stderr, starting with `listening on <ADDR>`. `RUST_LOG`
-sets the log filter (default `info`; `RUST_LOG=info,tower_http=debug` adds the
-requests). Ctrl-C or SIGTERM stops it once the requests in flight are answered. If it
-cannot start, for example because the port is taken, it exits with code 1.
+The server logs to stderr, starting with `listening on <ADDR>`, one line per
+request and one per rendered card (see [Logs](#logs)). `RUST_LOG` sets the log
+filter (default `info`). Ctrl-C or SIGTERM stops it once the requests in
+flight are answered. If it cannot start, for example because the port is
+taken, it exits with code 1.
 
 ### `POST /cards`
 
@@ -121,6 +123,30 @@ with one sentence on what it draws:
 ### `GET /health`
 
 Answers 200 with `{"status":"ok"}`.
+
+### Logs
+
+Every answer carries an `x-request-id` header: the one the request sent, else
+a new UUID. Browsers on an `--allow-origin` origin may read it
+(`Access-Control-Expose-Headers`). Each answer is logged at `INFO` as a
+`request` line (target `runcard::http`) with `method`, `path`, `status`,
+`latency_ms` and `request_id`, unknown paths and wrong methods included. `GET /health` is not
+logged, so the probes do not fill the log. Each rendered card adds a
+`card rendered` line (target `runcard::cards`) with `variant`, `theme`,
+`format`, `scale`, `splits`, `bytes` (the size of the answer), `render_ms`
+(the time of the card pipeline) and `request_id`. A failed render (500) logs
+its cause at `ERROR` with `request_id` and `error`; a 400 shows in its
+`request` line only.
+
+As JSON, each line is one object with `timestamp`, `level`, `message`,
+`target` and the event's fields at the top level. `GET /variants`, then
+`POST /cards` for a PNG:
+
+```json
+{"timestamp":"2026-11-09T12:01:35.904473Z","level":"INFO","message":"request","method":"GET","path":"/variants","status":200,"latency_ms":0.0,"request_id":"3e5da0c9-a263-4c94-a3cb-78c4e0a48812","target":"runcard::http"}
+{"timestamp":"2026-11-09T12:01:36.047455Z","level":"INFO","message":"card rendered","variant":"wave","theme":"dark","format":"png","scale":2.0,"splits":22,"bytes":209181,"render_ms":133.7,"request_id":"6906885d-1f51-47ff-81a4-3eefa0c6fe8e","target":"runcard::cards"}
+{"timestamp":"2026-11-09T12:01:36.047487Z","level":"INFO","message":"request","method":"POST","path":"/cards","status":200,"latency_ms":133.9,"request_id":"6906885d-1f51-47ff-81a4-3eefa0c6fe8e","target":"runcard::http"}
+```
 
 ## Limits
 

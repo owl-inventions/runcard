@@ -43,7 +43,19 @@ pub struct CardRequest {
 pub struct Rendered {
     pub svg: String,
     pub png: Vec<u8>,
+    /// The number of kilometre splits on the card.
+    pub splits: usize,
     /// `parse`, `analyze`, `layout`, `svg` and `png`, in that order.
+    pub timings: Vec<(&'static str, Duration)>,
+}
+
+/// The card as SVG only, with the time spent in each stage.
+#[derive(Debug, Clone)]
+pub struct RenderedSvg {
+    pub svg: String,
+    /// The number of kilometre splits on the card.
+    pub splits: usize,
+    /// `parse`, `analyze`, `layout` and `svg`, in that order.
     pub timings: Vec<(&'static str, Duration)>,
 }
 
@@ -76,7 +88,7 @@ impl Pipeline {
 
     /// The card for the GPX track read from `gpx`, as SVG markup.
     pub fn svg(&self, gpx: impl Read, req: &CardRequest) -> Result<String> {
-        self.timed_svg(gpx, req, &mut Stopwatch::start())
+        Ok(self.render_svg(gpx, req)?.svg)
     }
 
     /// The card for the GPX track read from `gpx`, as PNG bytes at `req.scale`.
@@ -87,22 +99,35 @@ impl Pipeline {
     /// The card as SVG and PNG, timing each stage.
     pub fn render(&self, gpx: impl Read, req: &CardRequest) -> Result<Rendered> {
         let mut clock = Stopwatch::start();
-        let svg = self.timed_svg(gpx, req, &mut clock)?;
+        let (svg, splits) = self.timed_svg(gpx, req, &mut clock)?;
         let png = self.renderer.png(&svg, req.scale)?;
         clock.lap("png");
         Ok(Rendered {
             svg,
             png,
+            splits,
             timings: clock.stages,
         })
     }
 
+    /// The card as SVG without the PNG, timing each stage.
+    pub fn render_svg(&self, gpx: impl Read, req: &CardRequest) -> Result<RenderedSvg> {
+        let mut clock = Stopwatch::start();
+        let (svg, splits) = self.timed_svg(gpx, req, &mut clock)?;
+        Ok(RenderedSvg {
+            svg,
+            splits,
+            timings: clock.stages,
+        })
+    }
+
+    /// The SVG markup and the number of splits on the card.
     fn timed_svg(
         &self,
         gpx: impl Read,
         req: &CardRequest,
         clock: &mut Stopwatch,
-    ) -> Result<String> {
+    ) -> Result<(String, usize)> {
         let track = gpx::parse(gpx)?;
         clock.lap("parse");
 
@@ -129,7 +154,7 @@ impl Pipeline {
 
         let svg = self.renderer.svg(&data)?;
         clock.lap("svg");
-        Ok(svg)
+        Ok((svg, analysis.splits.len()))
     }
 }
 
