@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1000" viewBox="0 0 720 1000">
+  <rect x="0" y="0" width="720" height="1000" fill="{{ theme.paper }}"/>
+
+  <g fill="{{ theme.ink }}">
+    <text x="32" y="52" font-family="IBM Plex Mono" font-weight="500" font-size="13" letter-spacing="3">{{ header }}</text>
+    <text x="688" y="52" text-anchor="end" font-family="IBM Plex Mono" font-weight="500" font-size="13" letter-spacing="3">{{ date }}</text>
+
+    <text x="32" y="130" font-family="Fraunces" font-size="{{ title_size }}">{{ title }}</text>
+  </g>
+
+  <g id="map">
+{%- if route_hero and route_hero.segments %}
+{%- for segment in route_hero.segments %}
+    <path d="{{ segment.path }}" fill="none" stroke="{{ segment.color }}" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+{%- endfor %}
+    <rect x="{{ (route_hero.finish[0] - 5) | round(2) }}" y="{{ (route_hero.finish[1] - 5) | round(2) }}" width="10" height="10" fill="{{ theme.ink }}"/>
+    <circle cx="{{ route_hero.start[0] }}" cy="{{ route_hero.start[1] }}" r="6" fill="{{ theme.ink }}"/>
+    <circle cx="{{ route_hero.start[0] }}" cy="{{ route_hero.start[1] }}" r="3" fill="{{ theme.paper }}"/>
+{%- endif %}
+  </g>
+
+  <g id="strip">
+{%- if route_hero %}
+{%- for band in route_hero.strip %}
+    <rect x="{{ band.x }}" y="640" width="{{ band.width }}" height="28" fill="{{ band.color }}"/>
+{%- endfor %}
+{%- endif %}
+  </g>
+{%- if route_hero and route_hero.fastest_x is not none %}
+  <circle cx="{{ route_hero.fastest_x }}" cy="632" r="3" fill="{{ theme.ink }}"/>
+{%- endif %}
+
+  <text x="32" y="740" font-family="Bebas Neue" font-size="{{ route_hero.runner_size if route_hero else runner_size }}" fill="{{ theme.ink }}">{{ (route_hero.runner if route_hero else runner) | upper }}</text>
+
+  <g fill="{{ theme.ink }}" font-family="IBM Plex Mono" font-weight="500" font-size="12" letter-spacing="3">
+    <text x="32" y="790">SLOW</text>
+{%- for color in legend %}
+    <rect x="{{ 104 + loop.index0 * 24 }}" y="779" width="22" height="14" fill="{{ color }}"/>
+{%- endfor %}
+    <text x="{{ 104 + (legend | length) * 24 + 30 }}" y="790">FAST</text>
+  </g>
+
+{%- if fastest_line %}
+  <text x="32" y="830" fill="{{ theme.ink }}" font-family="IBM Plex Mono" font-weight="500" font-size="13" letter-spacing="3">{{ fastest_line }}</text>
+{%- endif %}
+
+  <line x1="32" y1="860" x2="688" y2="860" stroke="{{ theme.ink }}" stroke-opacity="0.25" stroke-width="1"/>
+
+  <g fill="{{ theme.ink }}" font-family="IBM Plex Mono" font-weight="500" font-size="12" letter-spacing="3">
+    <text x="32" y="900">DISTANCE</text>
+    <text x="272" y="900">TIME</text>
+    <text x="512" y="900">PACE</text>
+  </g>
+  <g fill="{{ theme.ink }}" font-family="Bebas Neue" font-size="44">
+    <text x="32" y="948">{{ distance }}</text>
+    <text x="272" y="948">{{ time }}</text>
+    <text x="512" y="948">{{ pace }}</text>
+  </g>
+</svg>

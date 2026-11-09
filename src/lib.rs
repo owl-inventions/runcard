@@ -6,6 +6,7 @@ pub mod error;
 pub mod format;
 pub mod geo;
 pub mod gpx;
+pub mod layout;
 pub mod model;
 pub mod palette;
 pub mod pipeline;
@@ -14,6 +15,8 @@ pub mod route;
 pub mod server;
 pub mod splits;
 pub mod text;
+pub mod variant;
 
 pub use error::Error;
 pub use model::*;
+pub use variant::Variant;

@@ -1,21 +1,23 @@
 //! Builds the template context (`CardData`) from an `Analysis` and the run `Meta`.
 
 use crate::format;
-use crate::model::{Analysis, CardData, Meta, Split, Stripe};
+use crate::layout;
+use crate::model::{Analysis, CardData, Meta, Split, SplitView, Stripe};
 use crate::palette::{self, Palette};
 use crate::route::{self, BBox};
 use crate::text::{self, Font, TextMeasure};
+use crate::variant::Variant;
 
 /// Left edge of the stripe bar in card pixels.
-const STRIP_LEFT: f32 = 32.0;
+pub(crate) const STRIP_LEFT: f32 = 32.0;
 /// Width of the stripe bar (x = 32 to 688) in card pixels.
-const STRIP_WIDTH: f32 = 656.0;
+pub(crate) const STRIP_WIDTH: f32 = 656.0;
 /// Gap between neighbouring stripes in card pixels.
-const STRIPE_GAP: f32 = 2.0;
+pub(crate) const STRIPE_GAP: f32 = 2.0;
 /// Every kilometre divisible by this gets a tick under the bar.
-const TICK_EVERY_KM: u32 = 5;
+pub(crate) const TICK_EVERY_KM: u32 = 5;
 /// The box right of the runner's name that the route outline is fitted into.
-const ROUTE_BOX: BBox = BBox {
+pub(crate) const ROUTE_BOX: BBox = BBox {
     x: 564.0,
     y: 628.0,
     w: 120.0,
@@ -29,7 +31,7 @@ const LEGEND_SWATCHES: usize = 5;
 const ROUTE_MARGIN: f32 = 16.0;
 /// The runner's name: Bebas Neue in capitals from x = 32, ending at least
 /// [`ROUTE_MARGIN`] before the route box.
-const RUNNER_LINE: Line = Line {
+pub(crate) const RUNNER_LINE: Line = Line {
     font: Font::Condensed,
     size: 76.0,
     min_size: 40.0,
@@ -50,19 +52,25 @@ const CAPS_LETTER_SPACING: f32 = 3.0;
 /// Least room between the header and the right-aligned date, in card pixels.
 const HEADER_DATE_GAP: f32 = 24.0;
 
-/// Lays out and formats everything the card template shows.
+/// Lays out and formats everything the template of `variant` shows, with
+/// `palette` as its colour scale.
 ///
 /// A long runner's name or title is set smaller, down to a minimum size, and
 /// cut with an ellipsis if it does not fit even then; a long city is cut so
-/// the header does not run into the date.
+/// the header does not run into the date. Only the shape block of `variant`
+/// is built, if it has one.
 pub fn build(
     analysis: &Analysis,
     meta: &Meta,
     palette: &Palette,
     measure: &TextMeasure,
+    variant: Variant,
 ) -> CardData {
     let splits = &analysis.splits;
     let spans = spans(splits);
+    let (slow, fast) = anchors(splits);
+    let views = split_views(splits, slow, fast, palette);
+    let average = analysis.elapsed_s / analysis.distance_m * 1000.0;
     let fastest = analysis
         .fastest
         .and_then(|index| splits.iter().position(|s| s.index == index));
@@ -81,7 +89,7 @@ pub fn build(
         title_size,
         runner,
         runner_size,
-        stripes: stripes(splits, &spans, palette),
+        stripes: stripes(&views, &spans),
         fastest_x: fastest.map(|i| spans[i].centre()),
         ticks: ticks(splits, &spans),
         route,
@@ -92,21 +100,34 @@ pub fn build(
             .unwrap_or_default(),
         distance: format::distance(analysis.distance_m),
         time: format::duration(analysis.elapsed_s),
-        pace: format::pace(analysis.elapsed_s / analysis.distance_m * 1000.0),
+        pace: format::pace(average),
+        variant: variant.name(),
+        theme: variant.theme(),
+        avg_t: palette::pace_position(average, slow, fast),
+        avg_pace: format::pace_short(average),
+        rings: (variant == Variant::Rings)
+            .then(|| layout::rings::build(analysis, &views, palette, measure, meta)),
+        route_hero: (variant == Variant::Route)
+            .then(|| layout::route_hero::build(analysis, &views, palette, measure, meta)),
+        bars: (variant == Variant::Bars)
+            .then(|| layout::bars::build(analysis, &views, palette, measure, meta)),
+        mosaic: (variant == Variant::Mosaic)
+            .then(|| layout::mosaic::build(analysis, &views, palette, measure, meta)),
+        splits: views,
     }
 }
 
 /// A line of text that is shrunk, then cut, to stay within its room.
-struct Line {
-    font: Font,
+pub(crate) struct Line {
+    pub(crate) font: Font,
     /// The size the card is designed for, in px.
-    size: f32,
+    pub(crate) size: f32,
     /// The smallest size; a text too wide even at this size gets cut.
-    min_size: f32,
+    pub(crate) min_size: f32,
     /// Room from the start of the text to where it must end, in px.
-    max_width: f32,
+    pub(crate) max_width: f32,
     /// The template shows the text in capitals (`| upper`).
-    uppercase: bool,
+    pub(crate) uppercase: bool,
 }
 
 impl Line {
@@ -121,7 +142,7 @@ impl Line {
 
     /// `text` and the largest size, in steps of 0.1 px, at which it fits; at
     /// the minimum size and cut with an ellipsis if it does not fit even then.
-    fn fit(&self, measure: &TextMeasure, text: &str) -> (String, f32) {
+    pub(crate) fn fit(&self, measure: &TextMeasure, text: &str) -> (String, f32) {
         if self.fits(measure, text, self.size) {
             return (text.to_owned(), self.size);
         }
@@ -159,13 +180,13 @@ fn header(city: Option<&str>, date: &str, measure: &TextMeasure) -> String {
 
 /// Horizontal extent of one stripe in card pixels.
 #[derive(Debug, Clone, Copy)]
-struct Span {
-    x: f32,
-    width: f32,
+pub(crate) struct Span {
+    pub(crate) x: f32,
+    pub(crate) width: f32,
 }
 
 impl Span {
-    fn centre(self) -> f32 {
+    pub(crate) fn centre(self) -> f32 {
         self.x + self.width / 2.0
     }
 }
@@ -173,7 +194,7 @@ impl Span {
 /// One span per split, left to right from the strip's left edge with a gap
 /// between neighbours. Full kilometres share the strip evenly; the trailing
 /// partial gets its share of a full width, so the bar then ends short of 688.
-fn spans(splits: &[Split]) -> Vec<Span> {
+pub(crate) fn spans(splits: &[Split]) -> Vec<Span> {
     let n = splits.len() as f32;
     let full_width = (STRIP_WIDTH - STRIPE_GAP * (n - 1.0)) / n;
     let mut x = STRIP_LEFT;
@@ -192,21 +213,49 @@ fn spans(splits: &[Split]) -> Vec<Span> {
         .collect()
 }
 
-/// Stripes coloured by pace between the anchors of the full kilometres; the
-/// partial is coloured by its pace too but does not move the anchors.
-fn stripes(splits: &[Split], spans: &[Span], palette: &Palette) -> Vec<Stripe> {
+/// The colour scale anchors (slow, fast) of the full kilometres; a trailing
+/// partial does not move them.
+fn anchors(splits: &[Split]) -> (f64, f64) {
     let full_paces: Vec<f64> = splits
         .iter()
         .filter(|s| !s.partial)
         .map(Split::pace_s_per_km)
         .collect();
-    let (slow, fast) = palette::anchors(&full_paces);
+    palette::anchors(&full_paces)
+}
+
+/// One view per split, coloured by its pace between the `slow` and `fast`
+/// anchors; the partial is coloured by its pace too.
+fn split_views(splits: &[Split], slow: f64, fast: f64, palette: &Palette) -> Vec<SplitView> {
     splits
         .iter()
+        .map(|split| {
+            let pace = split.pace_s_per_km();
+            let t = palette::pace_position(pace, slow, fast);
+            SplitView {
+                index: split.index,
+                pace: format::pace_short(pace),
+                color: palette.hex(t),
+                partial: split.partial,
+                fraction: if split.partial {
+                    (split.distance_m / 1000.0) as f32
+                } else {
+                    1.0
+                },
+                t,
+            }
+        })
+        .collect()
+}
+
+/// One stripe per split, as wide as its span and in the colour of its view.
+fn stripes(views: &[SplitView], spans: &[Span]) -> Vec<Stripe> {
+    views
+        .iter()
         .zip(spans)
-        .map(|(split, span)| Stripe {
+        .map(|(view, span)| Stripe {
             width: span.width,
-            color: palette.hex(palette::pace_position(split.pace_s_per_km(), slow, fast)),
+            color: view.color.clone(),
         })
         .collect()
 }
@@ -226,6 +275,7 @@ mod tests {
     use super::*;
     use crate::model::TrackPoint;
     use crate::palette::{anchors, pace_position};
+    use crate::variant::Variant;
     use time::macros::{date, datetime};
 
     /// Full stripe width of a 43-split run: 656 px minus 42 gaps of 2 px, shared.
@@ -298,12 +348,28 @@ mod tests {
     }
 
     fn card(analysis: &Analysis) -> CardData {
-        build(analysis, &meta(), &Palette::new(), &TextMeasure::new())
+        card_as(analysis, Variant::Classic)
+    }
+
+    fn card_as(analysis: &Analysis, variant: Variant) -> CardData {
+        build(
+            analysis,
+            &meta(),
+            &Palette::light(),
+            &TextMeasure::new(),
+            variant,
+        )
     }
 
     /// The marathon card for `meta`.
     fn card_for(meta: Meta) -> CardData {
-        build(&marathon(), &meta, &Palette::new(), &TextMeasure::new())
+        build(
+            &marathon(),
+            &meta,
+            &Palette::light(),
+            &TextMeasure::new(),
+            Variant::Classic,
+        )
     }
 
     fn assert_near(actual: f32, expected: f32, what: &str) {
@@ -366,7 +432,7 @@ mod tests {
 
     #[test]
     fn the_fastest_kilometre_gets_the_fastest_colour_and_the_slowest_the_slowest() {
-        let palette = Palette::new();
+        let palette = Palette::light();
         let stripes = card(&marathon()).stripes;
         assert_eq!(stripes[29].color, palette.hex(1.0), "km 30");
         assert_eq!(stripes[5].color, palette.hex(0.0), "km 6 at 5:54");
@@ -384,7 +450,7 @@ mod tests {
             ],
             Some(1),
         );
-        let palette = Palette::new();
+        let palette = Palette::light();
         let stripes = card(&analysis).stripes;
         assert_eq!(stripes[0].color, palette.hex(1.0), "km 1 at 5:00");
         assert_eq!(stripes[1].color, palette.hex(0.0), "km 2 at 5:30");
@@ -393,7 +459,7 @@ mod tests {
 
     #[test]
     fn every_stripe_is_coloured_by_its_pace_between_the_full_kilometre_anchors() {
-        let palette = Palette::new();
+        let palette = Palette::light();
         let analysis = marathon();
         let full: Vec<f64> = analysis.splits[..42]
             .iter()
@@ -658,7 +724,115 @@ mod tests {
     #[test]
     fn the_legend_has_five_swatches_from_slow_to_fast() {
         let legend = card(&marathon()).legend;
-        assert_eq!(legend, Palette::new().legend(5));
+        assert_eq!(legend, Palette::light().legend(5));
         assert_eq!(legend.len(), 5);
+    }
+
+    #[test]
+    fn every_split_gets_a_view_with_its_pace_colour_and_scale_position() {
+        let card = card(&marathon());
+        assert_eq!(card.splits.len(), 43);
+        for (i, (view, stripe)) in card.splits.iter().zip(&card.stripes).enumerate() {
+            assert_eq!(view.index, i as u32 + 1);
+            assert_eq!(view.color, stripe.color, "km {}", view.index);
+            assert_eq!(
+                view.color,
+                Palette::light().hex(view.t),
+                "km {}",
+                view.index
+            );
+        }
+        let km30 = &card.splits[29];
+        assert_eq!(
+            (km30.pace.as_str(), km30.t, km30.partial, km30.fraction),
+            ("4:30", 1.0, false, 1.0)
+        );
+        assert_eq!(card.splits[5].t, 0.0, "km 6 at 5:54");
+    }
+
+    #[test]
+    fn the_partial_kilometre_view_has_its_fraction_and_its_scaled_pace() {
+        let last = card(&marathon()).splits.pop().expect("a last split");
+        assert_eq!(last.index, 43);
+        assert!(last.partial);
+        assert_near(last.fraction, 0.195, "fraction of the last split");
+        assert_eq!(last.pace, "5:20");
+    }
+
+    #[test]
+    fn the_average_pace_is_shown_bare_and_placed_on_the_scale() {
+        let analysis = marathon();
+        let full: Vec<f64> = analysis.splits[..42]
+            .iter()
+            .map(Split::pace_s_per_km)
+            .collect();
+        let (slow, fast) = anchors(&full);
+        let average = analysis.elapsed_s / analysis.distance_m * 1000.0;
+        let card = card(&analysis);
+        assert_eq!(card.avg_pace, "5:40");
+        assert_eq!(card.avg_t, pace_position(average, slow, fast));
+        assert!((0.0..1.0).contains(&card.avg_t), "{}", card.avg_t);
+    }
+
+    #[test]
+    fn the_card_names_its_variant_and_carries_its_theme() {
+        for variant in Variant::ALL {
+            let card = card_as(&marathon(), variant);
+            assert_eq!(card.variant, variant.name());
+            assert_eq!(card.theme, variant.theme(), "{variant}");
+        }
+    }
+
+    #[test]
+    fn only_the_shape_block_of_the_chosen_variant_is_built() {
+        for variant in Variant::ALL {
+            let card = card_as(&marathon(), variant);
+            let built = [
+                ("rings", card.rings.is_some()),
+                ("route", card.route_hero.is_some()),
+                ("bars", card.bars.is_some()),
+                ("mosaic", card.mosaic.is_some()),
+            ];
+            for (name, is_built) in built {
+                assert_eq!(
+                    is_built,
+                    name == variant.name(),
+                    "{name} block for {variant}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_classic_fields_are_the_same_for_every_variant() {
+        let classic = card(&marathon());
+        for variant in Variant::ALL {
+            let other = card_as(&marathon(), variant);
+            assert_eq!(
+                (&other.stripes, &other.ticks, &other.route, &other.legend),
+                (
+                    &classic.stripes,
+                    &classic.ticks,
+                    &classic.route,
+                    &classic.legend
+                ),
+                "{variant}"
+            );
+            assert_eq!(
+                (
+                    &other.runner,
+                    &other.title,
+                    &other.header,
+                    &other.fastest_line
+                ),
+                (
+                    &classic.runner,
+                    &classic.title,
+                    &classic.header,
+                    &classic.fastest_line
+                ),
+                "{variant}"
+            );
+        }
     }
 }

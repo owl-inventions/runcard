@@ -175,11 +175,13 @@ async fn empty_optional_parts_count_as_not_given_and_unknown_parts_are_ignored()
         ("date", ""),
         ("scale", ""),
         ("format", "svg"),
+        ("variant", " "),
         ("colour", "pink"),
     ]);
     let (status, _, body) = send(app(), request).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let svg = String::from_utf8(body.to_vec()).unwrap();
+    assert!(svg.contains(r##"fill="#f4efe6""##), "not classic: {svg}");
     assert!(svg.contains(">JULIA BRANDT</text>"), "{svg}");
     assert!(svg.contains(">Berlin Marathon</text>"), "{svg}");
     assert!(svg.contains("SEPTEMBER 27, 2026"), "{svg}");
@@ -258,6 +260,77 @@ async fn a_format_other_than_png_or_svg_is_a_bad_request() {
     ]);
     let message = error_of(app(), request, StatusCode::BAD_REQUEST).await;
     assert_eq!(message, "invalid format: expected png or svg, got \"jpeg\"");
+}
+
+#[tokio::test]
+async fn the_variant_part_picks_the_card_look() {
+    let gpx = five_k();
+    let request = post_cards(&[
+        ("gpx", &gpx),
+        ("runner", "Julia Brandt"),
+        ("variant", "noir"),
+        ("scale", "1"),
+    ]);
+    let (status, headers, body) = send(app(), request).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(content_type(&headers), "image/png");
+    assert!(body.starts_with(PNG_SIGNATURE));
+    assert_eq!(png_size(&body), (720, 1000));
+
+    let request = post_cards(&[
+        ("gpx", &gpx),
+        ("runner", "Julia Brandt"),
+        ("variant", "noir"),
+        ("format", "svg"),
+    ]);
+    let (status, _, body) = send(app(), request).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let svg = String::from_utf8(body.to_vec()).unwrap();
+    assert!(svg.contains("feGaussianBlur"), "{svg}");
+    assert!(svg.contains(r##"fill="#0f1115""##), "{svg}");
+}
+
+#[tokio::test]
+async fn an_unknown_variant_is_a_bad_request_listing_the_variants() {
+    let gpx = five_k();
+    let request = post_cards(&[
+        ("gpx", &gpx),
+        ("runner", "Julia Brandt"),
+        ("variant", "nope"),
+    ]);
+    let message = error_of(app(), request, StatusCode::BAD_REQUEST).await;
+    assert_eq!(
+        message,
+        r#"invalid variant: expected one of classic, noir, rings, route, bars, mosaic, got "nope""#
+    );
+}
+
+#[tokio::test]
+async fn variants_lists_every_variant_in_display_order() {
+    let request = Request::get("/variants").body(Body::empty()).unwrap();
+    let (status, headers, body) = send(app(), request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type(&headers), "application/json");
+    assert!(
+        body.starts_with(br#"[{"name":"classic","description":""#),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let expected: Vec<serde_json::Value> = runcard::Variant::ALL
+        .iter()
+        .map(|v| serde_json::json!({ "name": v.name(), "description": v.description() }))
+        .collect();
+    assert_eq!(json(&body), serde_json::Value::Array(expected));
+    let names: Vec<String> = json(&body)
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        names,
+        ["classic", "noir", "rings", "route", "bars", "mosaic"]
+    );
 }
 
 #[tokio::test]

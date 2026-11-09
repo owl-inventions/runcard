@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="1000" viewBox="0 0 720 1000">
-  <rect x="0" y="0" width="720" height="1000" fill="#f4efe6"/>
+  <rect x="0" y="0" width="720" height="1000" fill="{{ theme.paper }}"/>
 
-  <g fill="#1b1b1b">
+  <g fill="{{ theme.ink }}">
     <text x="32" y="52" font-family="IBM Plex Mono" font-weight="500" font-size="13" letter-spacing="3">{{ header }}</text>
     <text x="688" y="52" text-anchor="end" font-family="IBM Plex Mono" font-weight="500" font-size="13" letter-spacing="3">{{ date }}</text>
 
@@ -16,10 +16,10 @@
 {%- endfor %}
   </g>
 {%- if fastest_x is not none %}
-  <circle cx="{{ fastest_x }}" cy="166" r="4" fill="#1b1b1b"/>
+  <circle cx="{{ fastest_x }}" cy="166" r="4" fill="{{ theme.ink }}"/>
 {%- endif %}
 
-  <g fill="#1b1b1b" font-family="IBM Plex Mono" font-weight="500" font-size="12">
+  <g fill="{{ theme.ink }}" font-family="IBM Plex Mono" font-weight="500" font-size="12">
 {%- if ticks %}
     <text x="32" y="592" letter-spacing="2">KM</text>
 {%- endif %}
@@ -28,11 +28,11 @@
 {%- endfor %}
   </g>
 
-  <text x="32" y="700" font-family="Bebas Neue" font-size="{{ runner_size }}" fill="#1b1b1b">{{ runner | upper }}</text>
-  <path d="{{ route_path }}" fill="none" stroke="#1b1b1b" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
-  <circle cx="{{ route_start[0] }}" cy="{{ route_start[1] }}" r="4" fill="#e8601c"/>
+  <text x="32" y="700" font-family="Bebas Neue" font-size="{{ runner_size }}" fill="{{ theme.ink }}">{{ runner | upper }}</text>
+  <path d="{{ route_path }}" fill="none" stroke="{{ theme.ink }}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="{{ route_start[0] }}" cy="{{ route_start[1] }}" r="4" fill="{{ theme.accent }}"/>
 
-  <g fill="#1b1b1b" font-family="IBM Plex Mono" font-weight="500" font-size="12" letter-spacing="3">
+  <g fill="{{ theme.ink }}" font-family="IBM Plex Mono" font-weight="500" font-size="12" letter-spacing="3">
     <text x="32" y="760">SLOW</text>
 {%- for color in legend %}
     <rect x="{{ 104 + loop.index0 * 24 }}" y="749" width="22" height="14" fill="{{ color }}"/>
@@ -41,17 +41,17 @@
   </g>
 
 {%- if fastest_line %}
-  <text x="32" y="812" fill="#1b1b1b" font-family="IBM Plex Mono" font-weight="500" font-size="13" letter-spacing="3">{{ fastest_line }}</text>
+  <text x="32" y="812" fill="{{ theme.ink }}" font-family="IBM Plex Mono" font-weight="500" font-size="13" letter-spacing="3">{{ fastest_line }}</text>
 {%- endif %}
 
-  <line x1="32" y1="860" x2="688" y2="860" stroke="#1b1b1b" stroke-opacity="0.25" stroke-width="1"/>
+  <line x1="32" y1="860" x2="688" y2="860" stroke="{{ theme.ink }}" stroke-opacity="0.25" stroke-width="1"/>
 
-  <g fill="#1b1b1b" font-family="IBM Plex Mono" font-weight="500" font-size="12" letter-spacing="3">
+  <g fill="{{ theme.ink }}" font-family="IBM Plex Mono" font-weight="500" font-size="12" letter-spacing="3">
     <text x="32" y="900">DISTANCE</text>
     <text x="272" y="900">TIME</text>
     <text x="512" y="900">PACE</text>
   </g>
-  <g fill="#1b1b1b" font-family="Bebas Neue" font-size="44">
+  <g fill="{{ theme.ink }}" font-family="Bebas Neue" font-size="44">
     <text x="32" y="948">{{ distance }}</text>
     <text x="272" y="948">{{ time }}</text>
     <text x="512" y="948">{{ pace }}</text>

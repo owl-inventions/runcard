@@ -12,6 +12,7 @@ use crate::model::Meta;
 use crate::palette::Palette;
 use crate::render::Renderer;
 use crate::text::TextMeasure;
+use crate::variant::Variant;
 use crate::{card, gpx, splits};
 
 /// Event name used when neither the request nor the GPX track names one.
@@ -30,6 +31,8 @@ pub struct CardRequest {
     pub date: Option<Date>,
     /// Raster scale over the 720x1000 card size.
     pub scale: f32,
+    /// The card look.
+    pub variant: Variant,
 }
 
 /// The card as SVG and PNG, with the time spent in each stage.
@@ -41,21 +44,32 @@ pub struct Rendered {
     pub timings: Vec<(&'static str, Duration)>,
 }
 
-/// Renderer, text metrics and palette, built once and shared by every card.
+/// Renderer, text metrics and palettes, built once and shared by every card.
 pub struct Pipeline {
     renderer: Renderer,
     measure: TextMeasure,
-    palette: Palette,
+    light: Palette,
+    dark: Palette,
 }
 
 impl Pipeline {
-    /// Loads the fonts and the card template.
+    /// Loads the fonts and the card templates.
     pub fn new() -> Result<Self> {
         Ok(Self {
             renderer: Renderer::new()?,
             measure: TextMeasure::new(),
-            palette: Palette::new(),
+            light: Palette::light(),
+            dark: Palette::dark(),
         })
+    }
+
+    /// The colour scale of `variant`: dark for a dark variant, else light.
+    fn palette(&self, variant: Variant) -> &Palette {
+        if variant.is_dark() {
+            &self.dark
+        } else {
+            &self.light
+        }
     }
 
     /// The card for the GPX track read from `gpx`, as SVG markup.
@@ -101,7 +115,13 @@ impl Pipeline {
                 OffsetDateTime::now_utc().date()
             }),
         };
-        let data = card::build(&analysis, &meta, &self.palette, &self.measure);
+        let data = card::build(
+            &analysis,
+            &meta,
+            self.palette(req.variant),
+            &self.measure,
+            req.variant,
+        );
         clock.lap("layout");
 
         let svg = self.renderer.svg(&data)?;

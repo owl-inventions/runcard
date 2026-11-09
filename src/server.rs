@@ -1,5 +1,6 @@
 //! The HTTP API: `POST /cards` renders an uploaded GPX track as a card,
-//! `GET /health` answers that the server is up.
+//! `GET /variants` lists the card looks, `GET /health` answers that the
+//! server is up.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -11,12 +12,14 @@ use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::Serialize;
 use serde_json::{json, Value};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::error::Error;
 use crate::pipeline::{parse_date, parse_scale, CardRequest, Pipeline};
+use crate::variant::Variant;
 
 /// The request body limit unless configured otherwise: 20 MiB.
 pub const DEFAULT_MAX_BODY: usize = 20 * 1024 * 1024;
@@ -48,6 +51,7 @@ impl Default for Config {
 pub fn router(pipeline: Arc<Pipeline>, config: &Config) -> Router {
     let router = Router::new()
         .route("/health", get(health))
+        .route("/variants", get(variants))
         .route("/cards", post(create_card))
         .with_state(pipeline)
         .layer(DefaultBodyLimit::max(config.max_body));
@@ -76,6 +80,26 @@ fn cors(origins: &[HeaderValue]) -> Option<CorsLayer> {
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
+}
+
+/// A card look as `GET /variants` lists it.
+#[derive(Debug, Serialize)]
+struct VariantInfo {
+    name: &'static str,
+    description: &'static str,
+}
+
+/// Every variant in display order, the default first.
+async fn variants() -> Json<Vec<VariantInfo>> {
+    Json(
+        Variant::ALL
+            .iter()
+            .map(|variant| VariantInfo {
+                name: variant.name(),
+                description: variant.description(),
+            })
+            .collect(),
+    )
 }
 
 /// Renders the uploaded GPX track as a card, off the async runtime.
@@ -112,6 +136,7 @@ struct Form {
     date: Option<String>,
     scale: Option<String>,
     format: Option<String>,
+    variant: Option<String>,
 }
 
 impl Form {
@@ -129,6 +154,7 @@ impl Form {
                 Some("date") => &mut form.date,
                 Some("scale") => &mut form.scale,
                 Some("format") => &mut form.format,
+                Some("variant") => &mut form.variant,
                 _ => continue,
             };
             *text = Some(field.text().await?);
@@ -159,12 +185,18 @@ impl Form {
             .transpose()
             .map_err(|e| ApiError::bad_request(format!("invalid format: {e}")))?
             .unwrap_or(Format::Png);
+        let variant = given(self.variant)
+            .map(|variant| variant.parse())
+            .transpose()
+            .map_err(|e| ApiError::bad_request(format!("invalid variant: {e}")))?
+            .unwrap_or_default();
         let request = CardRequest {
             runner,
             event: given(self.event),
             city: given(self.city),
             date,
             scale,
+            variant,
         };
         Ok((gpx, request, format))
     }
