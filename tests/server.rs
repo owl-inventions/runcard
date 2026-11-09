@@ -3,39 +3,11 @@
 
 mod common;
 
-use std::sync::{Arc, OnceLock};
-
-use axum::body::{Body, Bytes};
+use axum::body::Body;
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::Router;
-use http_body_util::BodyExt;
-use runcard::pipeline::Pipeline;
-use runcard::server::{self, Config};
-use tower::ServiceExt;
-
-/// One pipeline for all tests: loading the fonts once keeps the suite fast.
-fn pipeline() -> Arc<Pipeline> {
-    static PIPELINE: OnceLock<Arc<Pipeline>> = OnceLock::new();
-    PIPELINE
-        .get_or_init(|| Arc::new(Pipeline::new().expect("the pipeline loads")))
-        .clone()
-}
-
-fn app() -> Router {
-    app_with(Config::default())
-}
-
-fn app_with(config: Config) -> Router {
-    server::router(pipeline(), &config)
-}
-
-/// Status, headers and body of the router's answer to `request`.
-async fn send(app: Router, request: Request<Body>) -> (StatusCode, HeaderMap, Bytes) {
-    let response = app.oneshot(request).await.expect("the router answers");
-    let (parts, body) = response.into_parts();
-    let bytes = body.collect().await.expect("a readable body").to_bytes();
-    (parts.status, parts.headers, bytes)
-}
+use common::http::{app, app_with, multipart, post_cards, send, BOUNDARY};
+use runcard::server::Config;
 
 fn content_type(headers: &HeaderMap) -> &str {
     headers
@@ -57,7 +29,6 @@ async fn health_answers_ok_as_json() {
     assert_eq!(json(&body), serde_json::json!({ "status": "ok" }));
 }
 
-const BOUNDARY: &str = "runcard-test-boundary-7MA4YWxkTrZu0gW";
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
 fn start() -> time::OffsetDateTime {
@@ -67,32 +38,6 @@ fn start() -> time::OffsetDateTime {
 /// A 5 km synthetic run named "Harbour Half", starting on 27 September 2026.
 fn five_k() -> String {
     common::synthetic_gpx(5_000.0, |_| 300.0, start())
-}
-
-/// A `multipart/form-data` body: `gpx` as a file part, every other part as text.
-fn multipart(parts: &[(&str, &str)]) -> Vec<u8> {
-    let mut body = String::new();
-    for (name, value) in parts {
-        body.push_str(&format!(
-            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\""
-        ));
-        if *name == "gpx" {
-            body.push_str("; filename=\"run.gpx\"\r\nContent-Type: application/gpx+xml");
-        }
-        body.push_str(&format!("\r\n\r\n{value}\r\n"));
-    }
-    body.push_str(&format!("--{BOUNDARY}--\r\n"));
-    body.into_bytes()
-}
-
-fn post_cards(parts: &[(&str, &str)]) -> Request<Body> {
-    Request::post("/cards")
-        .header(
-            header::CONTENT_TYPE,
-            format!("multipart/form-data; boundary={BOUNDARY}"),
-        )
-        .body(Body::from(multipart(parts)))
-        .unwrap()
 }
 
 /// Width and height of a PNG.
@@ -526,6 +471,24 @@ async fn an_origin_not_on_the_list_gets_no_allow_origin_header() {
 }
 
 #[tokio::test]
+async fn an_allowed_origin_may_read_the_request_id() {
+    let (_, headers, _) = send(allowing(&[ORIGIN]), health_from(ORIGIN)).await;
+    let exposed = headers[header::ACCESS_CONTROL_EXPOSE_HEADERS]
+        .to_str()
+        .unwrap();
+    assert!(
+        exposed
+            .split(',')
+            .any(|name| name.trim().eq_ignore_ascii_case("x-request-id")),
+        "{exposed}"
+    );
+    assert!(headers.contains_key("x-request-id"), "{headers:?}");
+
+    let (_, headers, _) = send(allowing(&["*"]), health_from(ORIGIN)).await;
+    assert_eq!(headers[header::ACCESS_CONTROL_EXPOSE_HEADERS], "*");
+}
+
+#[tokio::test]
 async fn a_star_allows_any_origin() {
     let (_, headers, _) = send(allowing(&["*"]), health_from("https://anywhere.example")).await;
     assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
@@ -561,91 +524,219 @@ fn the_binary_rejects_a_body_limit_of_0() {
 
 /// A started server, killed when the test ends, also when an assertion fails.
 #[cfg(unix)]
-struct Running(std::process::Child);
+struct Running {
+    child: std::process::Child,
+    /// The address it listens on.
+    addr: String,
+    /// Its stderr lines up to and including the `listening on` line.
+    log: Vec<String>,
+    stderr: std::io::BufReader<std::process::ChildStderr>,
+}
+
+#[cfg(unix)]
+impl Running {
+    /// The stderr lines after the `listening on` line, up to the end; call it
+    /// once the server has stopped.
+    fn rest_of_log(&mut self) -> Vec<String> {
+        use std::io::BufRead;
+
+        (&mut self.stderr)
+            .lines()
+            .map(|line| line.expect("a utf-8 log line"))
+            .collect()
+    }
+}
 
 #[cfg(unix)]
 impl Drop for Running {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
-/// Starts the server binary on an ephemeral port with `envs` set and waits
-/// for its `listening on` line; returns it with the bound address.
+/// Starts the server binary on an ephemeral port with `args` and `envs` and
+/// waits for its `listening on` line.
 #[cfg(unix)]
-fn start_server(envs: &[(&str, String)]) -> (Running, String) {
+fn start_server(args: &[&str], envs: &[(&str, String)]) -> Running {
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
 
     let mut command = runcard_server();
     command
         .args(["--bind", "127.0.0.1:0"])
+        .args(args)
         .env("RUST_LOG", "info")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     for (name, value) in envs {
         command.env(name, value);
     }
-    let mut server = Running(command.spawn().expect("the server binary starts"));
-    let mut stderr = BufReader::new(server.0.stderr.take().unwrap());
-    let mut line = String::new();
+    let mut child = command.spawn().expect("the server binary starts");
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut log = Vec::new();
     let addr = loop {
-        line.clear();
+        let mut line = String::new();
         if stderr.read_line(&mut line).unwrap() == 0 {
-            panic!("the server exited without listening");
+            panic!("the server exited without listening: {log:?}");
         }
-        if let Some((_, addr)) = line.split_once("listening on ") {
-            break addr.trim().to_owned();
+        let addr = listening_addr(&line);
+        log.push(line.trim_end().to_owned());
+        if let Some(addr) = addr {
+            break addr;
         }
     };
+    let listening = log.last().unwrap();
     assert!(
-        !line.contains('\x1b'),
-        "colour codes in a piped log: {line:?}"
+        !listening.contains('\x1b'),
+        "colour codes in a piped log: {listening:?}"
     );
-    (server, addr)
+    Running {
+        child,
+        addr,
+        log,
+        stderr,
+    }
+}
+
+/// The address of a `listening on <ADDR>` line, written as text or JSON.
+#[cfg(unix)]
+fn listening_addr(line: &str) -> Option<String> {
+    let message = match serde_json::from_str::<serde_json::Value>(line) {
+        Ok(json) => json["message"].as_str()?.to_owned(),
+        Err(_) => line.to_owned(),
+    };
+    let (_, addr) = message.split_once("listening on ")?;
+    Some(addr.trim().to_owned())
 }
 
 /// Sends `signal` (`INT` or `TERM`) to the server and waits for it to exit.
 #[cfg(unix)]
 fn stop_server(server: &mut Running, signal: &str) -> std::process::ExitStatus {
     let killed = std::process::Command::new("kill")
-        .args([&format!("-{signal}"), &server.0.id().to_string()])
+        .args([&format!("-{signal}"), &server.child.id().to_string()])
         .status()
         .unwrap();
     assert!(killed.success());
-    server.0.wait().unwrap()
+    server.child.wait().unwrap()
+}
+
+/// The raw HTTP/1.1 answer of the server at `addr` to `GET <path>` with `headers`.
+#[cfg(unix)]
+fn get(addr: &str, path: &str, headers: &[(&str, &str)]) -> String {
+    use std::io::{Read, Write};
+
+    let mut request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n");
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str("Connection: close\r\n\r\n");
+    let mut stream = std::net::TcpStream::connect(addr).unwrap();
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).unwrap();
+    answer
+}
+
+/// The value of the header `name` (lowercase) in a raw HTTP/1.1 answer.
+#[cfg(unix)]
+fn header_of<'a>(answer: &'a str, name: &str) -> Option<&'a str> {
+    answer
+        .lines()
+        .find_map(|line| line.strip_prefix(name)?.strip_prefix(": "))
 }
 
 #[cfg(unix)]
 #[test]
 fn the_binary_shuts_down_cleanly_on_sigterm() {
-    let (mut server, _) = start_server(&[]);
+    let mut server = start_server(&[], &[]);
     let status = stop_server(&mut server, "TERM");
     assert_eq!(status.code(), Some(0), "{status}");
 }
 
 #[cfg(unix)]
 #[test]
+fn the_binary_logs_json_lines_with_log_format_json() {
+    let mut server = start_server(&["--log-format", "json"], &[]);
+    assert_eq!(
+        server.log.len(),
+        1,
+        "lines before listening: {:?}",
+        server.log
+    );
+    let listening: serde_json::Value =
+        serde_json::from_str(&server.log[0]).expect("a json listening line");
+    assert_eq!(listening["level"], "INFO");
+    assert_eq!(
+        listening["message"],
+        format!("listening on {}", server.addr)
+    );
+    assert!(listening["timestamp"].is_string(), "{listening}");
+
+    let answer = get(&server.addr, "/variants", &[]);
+    assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
+    let request_id = header_of(&answer, "x-request-id").expect("an x-request-id header");
+    get(&server.addr, "/health", &[]);
+
+    let status = stop_server(&mut server, "TERM");
+    assert!(status.success(), "{status}");
+    let rest: Vec<serde_json::Value> = server
+        .rest_of_log()
+        .iter()
+        .map(|line| serde_json::from_str(line).expect("a json log line"))
+        .collect();
+    let requests: Vec<_> = rest
+        .iter()
+        .filter(|line| line["message"] == "request")
+        .collect();
+    assert_eq!(requests.len(), 1, "{rest:?}");
+    assert_eq!(requests[0]["path"], "/variants");
+    assert_eq!(requests[0]["method"], "GET");
+    assert_eq!(requests[0]["status"], 200);
+    assert_eq!(requests[0]["request_id"], request_id);
+    assert!(requests[0].get("span").is_none(), "{}", requests[0]);
+    assert_eq!(rest.last().unwrap()["message"], "shutting down", "{rest:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_binary_logs_json_into_a_pipe_by_default() {
+    let mut server = start_server(&[], &[]);
+    let listening: serde_json::Value =
+        serde_json::from_str(&server.log[0]).expect("a json listening line");
+    assert_eq!(listening["level"], "INFO");
+    assert!(stop_server(&mut server, "TERM").success());
+}
+
+#[cfg(unix)]
+#[test]
+fn the_binary_logs_text_into_a_pipe_when_asked() {
+    let mut server = start_server(&[], &[("RUNCARD_LOG_FORMAT", "text".into())]);
+    let listening = &server.log[0];
+    assert!(
+        serde_json::from_str::<serde_json::Value>(listening).is_err(),
+        "{listening}"
+    );
+    assert!(listening.contains(" INFO "), "{listening}");
+    assert!(
+        listening.ends_with(&format!("listening on {}", server.addr)),
+        "{listening}"
+    );
+    assert!(stop_server(&mut server, "TERM").success());
+}
+
+#[cfg(unix)]
+#[test]
 fn the_binary_serves_health_to_the_allowed_origins_and_shuts_down_on_ctrl_c() {
-    use std::io::{Read, Write};
+    let mut server = start_server(
+        &[],
+        &[(
+            "RUNCARD_ALLOW_ORIGIN",
+            format!("https://other.example, {ORIGIN}"),
+        )],
+    );
 
-    let (mut server, addr) = start_server(&[(
-        "RUNCARD_ALLOW_ORIGIN",
-        format!("https://other.example, {ORIGIN}"),
-    )]);
-
-    let mut stream = std::net::TcpStream::connect(&addr).unwrap();
-    stream
-        .write_all(
-            format!(
-                "GET /health HTTP/1.1\r\nHost: localhost\r\nOrigin: {ORIGIN}\r\nConnection: close\r\n\r\n"
-            )
-            .as_bytes(),
-        )
-        .unwrap();
-    let mut answer = String::new();
-    stream.read_to_string(&mut answer).unwrap();
+    let answer = get(&server.addr, "/health", &[("Origin", ORIGIN)]);
     assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
     assert!(
         answer.contains(&format!("access-control-allow-origin: {ORIGIN}\r\n")),
