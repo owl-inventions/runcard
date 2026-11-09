@@ -1,20 +1,15 @@
 //! `runcard <INPUT.gpx> --runner <NAME>`: renders a GPX track as a PNG card.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use runcard::palette::Palette;
-use runcard::render::Renderer;
-use runcard::text::TextMeasure;
-use runcard::{card, gpx, splits, Meta};
-use time::macros::format_description;
-use time::{Date, OffsetDateTime, UtcOffset};
-
-/// Event name used when neither `--event` nor the GPX track names one.
-const DEFAULT_EVENT: &str = "Run";
+use runcard::pipeline::{parse_date, parse_scale, CardRequest, Pipeline};
+use runcard::Error;
+use time::Date;
 
 /// Turns a GPX track into a poster-style PNG card: one coloured stripe per
 /// kilometre, the runner's name, the route outline and the race stats.
@@ -54,118 +49,55 @@ fn main() -> Result<()> {
     run(Args::parse())
 }
 
-/// The pipeline: GPX -> analysis -> card layout -> SVG -> PNG on disk.
+/// Renders the card with the shared pipeline and writes the PNG (and the SVG) to disk.
 fn run(args: Args) -> Result<()> {
-    let mut clock = Stopwatch::start();
     let input = args.input;
-    let track = gpx::load(&input).with_context(|| format!("reading {}", input.display()))?;
-    clock.lap("parse");
-
-    let analysis =
-        splits::analyze(&track).with_context(|| format!("analysing {}", input.display()))?;
-    clock.lap("analyze");
-
-    let meta = Meta {
+    let file = File::open(&input).with_context(|| format!("reading {}", input.display()))?;
+    let pipeline = Pipeline::new().context("loading the card template and fonts")?;
+    let request = CardRequest {
         runner: args.runner,
-        event: event_name(args.event, track.name.as_deref()),
+        event: args.event,
         city: args.city,
-        date: run_date(args.date, analysis.start, || {
-            OffsetDateTime::now_utc().date()
-        }),
+        date: args.date,
+        scale: args.scale,
     };
-    let data = card::build(&analysis, &meta, &Palette::new(), &TextMeasure::new());
-    clock.lap("layout");
+    let rendered = pipeline
+        .render(BufReader::new(file), &request)
+        .map_err(|error| with_stage(error, &input))?;
 
-    let renderer = Renderer::new().context("loading the card template and fonts")?;
-    let svg = renderer.svg(&data).context("filling the card template")?;
     if let Some(path) = &args.svg {
-        fs::write(path, &svg).with_context(|| format!("writing {}", path.display()))?;
+        fs::write(path, &rendered.svg).with_context(|| format!("writing {}", path.display()))?;
     }
-    clock.lap("svg");
-
-    let png = renderer
-        .png(&svg, args.scale)
-        .context("rasterising the card")?;
     let output = args.output.unwrap_or_else(|| default_output(&input));
-    fs::write(&output, png).with_context(|| format!("writing {}", output.display()))?;
-    clock.lap("png");
+    fs::write(&output, &rendered.png).with_context(|| format!("writing {}", output.display()))?;
 
     println!("wrote {}", output.display());
     if args.timing {
-        eprint!("{}", clock.report());
+        let total = rendered.timings.iter().map(|(_, d)| *d).sum();
+        eprint!("{}", timing_report(&rendered.timings, total));
     }
     Ok(())
 }
 
-/// Wall-clock time per pipeline stage, for `--timing`.
-struct Stopwatch {
-    start: Instant,
-    last: Instant,
-    stages: Vec<(&'static str, Duration)>,
-}
-
-impl Stopwatch {
-    fn start() -> Self {
-        let now = Instant::now();
-        Self {
-            start: now,
-            last: now,
-            stages: Vec::new(),
+/// `error` with the pipeline stage it came from as context.
+fn with_stage(error: Error, input: &Path) -> anyhow::Error {
+    let stage = match error {
+        Error::Io(_) | Error::Gpx(_) | Error::TooFewPoints => {
+            format!("reading {}", input.display())
         }
-    }
-
-    /// Ends the stage `name` now and starts the next one.
-    fn lap(&mut self, name: &'static str) {
-        let now = Instant::now();
-        self.stages.push((name, now - self.last));
-        self.last = now;
-    }
-
-    fn report(&self) -> String {
-        timing_report(&self.stages, self.last - self.start)
-    }
-}
-
-/// Parses a `--date` value: `YYYY-MM-DD`.
-fn parse_date(s: &str) -> Result<Date, String> {
-    Date::parse(s, format_description!("[year]-[month]-[day]"))
-        .map_err(|e| format!("expected a date as YYYY-MM-DD: {e}"))
-}
-
-/// Parses a `--scale` value: a finite number above zero.
-fn parse_scale(s: &str) -> Result<f32, String> {
-    let scale: f32 = s.parse().map_err(|e| format!("not a number: {e}"))?;
-    if scale.is_finite() && scale > 0.0 {
-        Ok(scale)
-    } else {
-        Err(format!("must be a finite number above 0, got {scale}"))
-    }
+        Error::NoTimestamps
+        | Error::MissingTimestamp { .. }
+        | Error::TimeNotMonotonic { .. }
+        | Error::TooShort => format!("analysing {}", input.display()),
+        Error::Template(_) => "filling the card template".to_owned(),
+        Error::Svg(_) | Error::Png(_) => "rasterising the card".to_owned(),
+    };
+    anyhow::Error::new(error).context(stage)
 }
 
 /// The PNG next to the input: `runs/berlin.gpx` becomes `runs/berlin.png`.
 fn default_output(input: &Path) -> PathBuf {
     input.with_extension("png")
-}
-
-/// `--event` if given, else the track's name, else "Run".
-fn event_name(arg: Option<String>, track_name: Option<&str>) -> String {
-    arg.or_else(|| {
-        track_name
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned)
-    })
-    .unwrap_or_else(|| DEFAULT_EVENT.to_owned())
-}
-
-/// `--date` if given, else the UTC date of the first timestamp, else `today`.
-fn run_date(
-    arg: Option<Date>,
-    start: Option<OffsetDateTime>,
-    today: impl FnOnce() -> Date,
-) -> Date {
-    arg.or_else(|| start.map(|t| t.to_offset(UtcOffset::UTC).date()))
-        .unwrap_or_else(today)
 }
 
 /// One `<stage> <ms> ms` line per stage, then the total.
@@ -180,28 +112,6 @@ fn timing_report(stages: &[(&str, Duration)], total: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use time::macros::{date, datetime};
-
-    #[test]
-    fn a_date_is_parsed_from_year_month_day() {
-        assert_eq!(parse_date("2026-09-27"), Ok(date!(2026 - 09 - 27)));
-    }
-
-    #[test]
-    fn other_date_formats_are_rejected() {
-        for input in ["27.09.2026", "2026-9-27", "2026-02-30", ""] {
-            assert!(parse_date(input).is_err(), "{input:?} was accepted");
-        }
-    }
-
-    #[test]
-    fn the_scale_must_be_a_positive_number() {
-        assert_eq!(parse_scale("2"), Ok(2.0));
-        assert_eq!(parse_scale("0.5"), Ok(0.5));
-        for input in ["0", "-1", "abc", "NaN", "inf"] {
-            assert!(parse_scale(input).is_err(), "{input:?} was accepted");
-        }
-    }
 
     #[test]
     fn the_output_defaults_to_the_input_with_a_png_extension() {
@@ -213,27 +123,6 @@ mod tests {
             default_output(Path::new("berlin")),
             PathBuf::from("berlin.png")
         );
-    }
-
-    #[test]
-    fn the_event_is_the_argument_else_the_track_name_else_run() {
-        assert_eq!(
-            event_name(Some("Spreelauf".into()), Some("Morning Run")),
-            "Spreelauf"
-        );
-        assert_eq!(event_name(None, Some("Berlin Marathon")), "Berlin Marathon");
-        assert_eq!(event_name(None, Some("  ")), "Run");
-        assert_eq!(event_name(None, None), "Run");
-    }
-
-    #[test]
-    fn the_date_is_the_argument_else_the_utc_start_date_else_today() {
-        let today = || date!(2026 - 11 - 08);
-        let given = Some(date!(2026 - 05 - 03));
-        let start = Some(datetime!(2026-09-27 01:30 +02:00));
-        assert_eq!(run_date(given, start, today), date!(2026 - 05 - 03));
-        assert_eq!(run_date(None, start, today), date!(2026 - 09 - 26));
-        assert_eq!(run_date(None, None, today), date!(2026 - 11 - 08));
     }
 
     #[test]

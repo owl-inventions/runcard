@@ -242,3 +242,46 @@ fn a_missing_input_fails_with_exit_code_1_and_names_the_file() {
         "{stderr}"
     );
 }
+
+#[test]
+fn a_track_without_timestamps_fails_with_exit_code_1_and_names_the_analysis() {
+    let path = common::write_fixture(
+        "cli-no-timestamps.gpx",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="runcard-tests" xmlns="http://www.topografix.com/GPX/1/1">
+<trk><trkseg><trkpt lat="52.5" lon="13.4"/><trkpt lat="52.51" lon="13.41"/></trkseg></trk>
+</gpx>"#,
+    );
+    let output = runcard(&[
+        path.as_os_str(),
+        "--runner".as_ref(),
+        "Julia Brandt".as_ref(),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!("analysing {}", path.display())),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("track has no timestamps, pace cannot be derived"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn an_invalid_gpx_fails_with_exit_code_1_and_names_the_file() {
+    let path = common::write_fixture("cli-invalid.gpx", "<gpx version=\"1.1\"><trk><trkseg>");
+    let output = runcard(&[
+        path.as_os_str(),
+        "--runner".as_ref(),
+        "Julia Brandt".as_ref(),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!("reading {}", path.display())),
+        "{stderr}"
+    );
+    assert!(stderr.contains("invalid gpx"), "{stderr}");
+}

@@ -8,8 +8,10 @@ pub mod geo;
 pub mod gpx;
 pub mod model;
 pub mod palette;
+pub mod pipeline;
 pub mod render;
 pub mod route;
+pub mod server;
 pub mod splits;
 pub mod text;
 
