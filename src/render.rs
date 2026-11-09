@@ -9,13 +9,14 @@ use crate::error::{Error, Result};
 use crate::layout::{
     dots::Dots, ledger::Ledger, ribbon::Ribbon, spiral::Spiral, trail::Trail, wave::Wave,
 };
-use crate::model::CardData;
+use crate::model::{CardData, RoutePreview};
 use crate::text::{Face, Role};
 use crate::theme::Tokens;
 use crate::variant::Variant;
 
 /// The shared frame every variant template extends: title block, legend,
-/// footer and, in the dark theme, the glow under the visualisation.
+/// route preview, footer and, in the dark theme, the glow under the
+/// visualisation.
 const FRAME: &str = include_str!("../templates/frame.svg");
 
 /// The file name and the source of the template of `variant`, compiled in.
@@ -115,6 +116,7 @@ fn template_context(data: &CardData) -> Value {
         title_size => px(data.title_size),
         subline => xml_chars(&data.subline),
         legend => &data.legend,
+        route => data.route.as_ref().map(route_value),
         time => &data.time,
         distance => &data.distance,
         pace => &data.pace,
@@ -129,6 +131,16 @@ fn template_context(data: &CardData) -> Value {
         dots => data.dots.as_ref().map(Dots::to_value),
         wave => data.wave.as_ref().map(Wave::to_value),
         ledger => data.ledger.as_ref().map(Ledger::to_value),
+    }
+}
+
+/// `route.path` and `route.start.x`, `route.start.y`, the start rounded to
+/// two decimals.
+fn route_value(route: &RoutePreview) -> Value {
+    let (x, y) = route.start;
+    context! {
+        path => &route.path,
+        start => context! { x => px(x), y => px(y) },
     }
 }
 
@@ -234,7 +246,7 @@ fn encode(pixmap: &tiny_skia::Pixmap) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::card;
-    use crate::model::{Analysis, Meta, Split, SplitView, TrackPoint};
+    use crate::model::{Analysis, Meta, RoutePreview, Split, SplitView, TrackPoint};
     use crate::palette::Palette;
     use crate::text::{Role, TextMeasure};
     use crate::theme::{Theme, Tokens};
@@ -247,6 +259,7 @@ mod tests {
             title_size: 40.0,
             subline: "Lisbon \u{b7} 19 April 2026".into(),
             legend: Palette::for_theme(Theme::Light).legend(32),
+            route: None,
             time: "1:48:58".into(),
             distance: "21.10 km".into(),
             pace: "5:10 /km".into(),
@@ -272,6 +285,14 @@ mod tests {
             theme: theme.tokens(),
             legend: palette.legend(32),
             ..fixture("Mara Lindqvist")
+        }
+    }
+
+    /// A route preview from (600, 760.26) to the box's right edge.
+    fn preview() -> RoutePreview {
+        RoutePreview {
+            path: "M 600.0 760.3 L 650.5 790.0 L 672.0 734.0".into(),
+            start: (600.004, 760.256),
         }
     }
 
@@ -472,6 +493,44 @@ mod tests {
             svg.contains(r##"<rect x="48" y="800" width="624" height="1" fill="#d9dad6"/>"##),
             "{svg}"
         );
+    }
+
+    #[test]
+    fn the_frame_draws_the_route_preview_after_the_legend_once_in_both_themes() {
+        for theme in Theme::ALL {
+            let data = CardData {
+                route: Some(preview()),
+                ..fixture_as(Variant::Ribbon, theme)
+            };
+            let svg = svg_of(&data);
+            let ink = theme.tokens().ink;
+            let path = format!(
+                r#"<path d="M 600.0 760.3 L 650.5 790.0 L 672.0 734.0" fill="none" stroke="{ink}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>"#
+            );
+            let start = format!(r#"<circle cx="600" cy="760.26" r="2.5" fill="{ink}"/>"#);
+            for tag in [&path, &start] {
+                assert_eq!(
+                    svg.matches(tag.as_str()).count(),
+                    1,
+                    "{theme}: {tag} in {svg}"
+                );
+                let at = svg.find(tag.as_str()).unwrap();
+                assert!(
+                    at > svg.find(">faster</text>").unwrap(),
+                    "{theme}: {tag} before the legend"
+                );
+                assert!(
+                    at < svg.find(r#"y="800""#).unwrap(),
+                    "{theme}: {tag} after the rule"
+                );
+            }
+            let without = svg_of(&fixture_as(Variant::Ribbon, theme));
+            assert!(
+                !without.contains(r#"stroke-width="1.5""#),
+                "{theme}: {without}"
+            );
+            assert!(!without.contains(r#"r="2.5""#), "{theme}: {without}");
+        }
     }
 
     #[test]
@@ -717,6 +776,7 @@ mod tests {
             let data = CardData {
                 theme: tokens,
                 legend: vec!["#0d0e0f".into(); 32],
+                route: Some(preview()),
                 ..fixture_as(variant, Theme::Light)
             };
             let svg = renderer.svg(&data).unwrap();
@@ -798,9 +858,28 @@ mod tests {
         assert!(attr(&split, "partial").is_true());
         assert_eq!(attr(&split, "fraction").to_string(), "0.1");
         assert_eq!(attr(&split, "t").to_string(), "0.67");
-        for block in ["ribbon", "spiral", "trail", "dots", "wave", "ledger"] {
+        for block in [
+            "route", "ribbon", "spiral", "trail", "dots", "wave", "ledger",
+        ] {
             assert!(attr(&context, block).is_none(), "{block}");
         }
+    }
+
+    #[test]
+    fn the_route_preview_reaches_the_context_with_its_start_rounded() {
+        let data = CardData {
+            route: Some(preview()),
+            ..fixture_as(Variant::Ribbon, Theme::Light)
+        };
+        let route = template_context(&data).get_attr("route").unwrap();
+        let attr = |value: &Value, name: &str| value.get_attr(name).unwrap();
+        assert_eq!(
+            attr(&route, "path").as_str(),
+            Some("M 600.0 760.3 L 650.5 790.0 L 672.0 734.0")
+        );
+        let start = attr(&route, "start");
+        assert_eq!(attr(&start, "x").to_string(), "600");
+        assert_eq!(attr(&start, "y").to_string(), "760.26");
     }
 
     #[test]

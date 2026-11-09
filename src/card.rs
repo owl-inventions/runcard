@@ -1,11 +1,12 @@
 //! Builds the template context (`CardData`) from an `Analysis` and the run
-//! `Meta`: the shared frame (title block, legend, footer) and the shape block
-//! of the chosen variant.
+//! `Meta`: the shared frame (title block, legend, route preview, footer) and
+//! the shape block of the chosen variant.
 
 use crate::format::{self, DOT};
 use crate::layout;
-use crate::model::{Analysis, CardData, Meta, Split, SplitView};
+use crate::model::{Analysis, CardData, Meta, RoutePreview, Split, SplitView, TrackPoint};
 use crate::palette::{self, Palette};
+use crate::route::{self, BBox};
 use crate::text::{self, Role, TextMeasure};
 use crate::theme::Theme;
 use crate::variant::Variant;
@@ -14,6 +15,16 @@ use crate::variant::Variant;
 pub const CONTENT_WIDTH: f32 = 624.0;
 /// Number of 5 px rects in the 160 px legend bar.
 pub const LEGEND_STEPS: usize = 32;
+/// The box right of the legend, flush with the content's right edge, that
+/// the route preview is fitted into.
+const PREVIEW_BOX: BBox = BBox {
+    x: 472.0,
+    y: 734.0,
+    w: 200.0,
+    h: 56.0,
+};
+/// Most points the route preview is drawn with.
+const PREVIEW_POINTS: usize = 120;
 /// The event title: Display at 40 px, shrunk down to 28 px, then cut.
 const TITLE_LINE: Line = Line {
     role: Role::Display,
@@ -41,7 +52,8 @@ const SUBLINE: Line = Line {
 ///
 /// A long title is set smaller, down to 28 px, and cut with an ellipsis if
 /// it does not fit even then; a long name is cut; a long city is cut before
-/// the date. Only the shape block of `variant` is built.
+/// the date. Only the shape block of `variant` is built, and every variant
+/// but `trail`, whose picture is the route, gets the route preview.
 pub fn build(
     analysis: &Analysis,
     meta: &Meta,
@@ -69,6 +81,10 @@ pub fn build(
         title_size,
         subline: subline(meta, measure),
         legend: palette.legend(LEGEND_STEPS),
+        route: match variant {
+            Variant::Trail => None,
+            _ => route_preview(&analysis.points),
+        },
         time: format::duration(analysis.elapsed_s),
         distance: format::distance(analysis.distance_m),
         pace: format::pace(average),
@@ -153,6 +169,25 @@ fn subline(meta: &Meta, measure: &TextMeasure) -> String {
     line(&text::truncate_to_fit(city, fits))
 }
 
+/// The route fitted into [`PREVIEW_BOX`] with its aspect ratio kept,
+/// simplified to [`PREVIEW_POINTS`], then moved right until its right-most
+/// point sits on the box's right edge; vertically it stays centred. `None`
+/// for a track with fewer than two distinct points.
+fn route_preview(points: &[TrackPoint]) -> Option<RoutePreview> {
+    let outline = route::outline(points, PREVIEW_BOX, PREVIEW_POINTS);
+    let &first = outline.first()?;
+    if outline.iter().all(|&point| point == first) {
+        return None;
+    }
+    let right = outline.iter().map(|&(x, _)| x).fold(f32::MIN, f32::max);
+    let shift = PREVIEW_BOX.x + PREVIEW_BOX.w - right;
+    let shifted: Vec<(f32, f32)> = outline.iter().map(|&(x, y)| (x + shift, y)).collect();
+    Some(RoutePreview {
+        path: route::to_path(&shifted),
+        start: shifted[0],
+    })
+}
+
 /// The colour scale anchors (slow, fast) of the full kilometres; a trailing
 /// partial does not move them.
 fn anchors(splits: &[Split]) -> (f64, f64) {
@@ -191,7 +226,6 @@ fn split_views(splits: &[Split], slow: f64, fast: f64, palette: &Palette) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::TrackPoint;
     use crate::palette::{anchors, pace_position};
     use time::macros::{date, datetime};
 
@@ -590,5 +624,122 @@ mod tests {
         assert_eq!(card.avg_pace, "5:30");
         assert_eq!(card.avg_t, pace_position(average, slow, fast));
         assert!((0.0..1.0).contains(&card.avg_t), "{}", card.avg_t);
+    }
+
+    /// A closed loop of `n` steps around Lisbon, about 3.5 km east to west
+    /// and 2.2 km south to north, starting at its eastern end.
+    fn lisbon_loop(n: usize) -> Vec<TrackPoint> {
+        (0..=n)
+            .map(|i| {
+                let a = i as f64 / n as f64 * std::f64::consts::TAU;
+                TrackPoint {
+                    lat: 38.70 + 0.01 * a.sin(),
+                    lon: -9.15 + 0.02 * a.cos(),
+                    time: None,
+                }
+            })
+            .collect()
+    }
+
+    /// The route preview of the half marathon run along `points`, as `variant`.
+    fn preview_of(points: Vec<TrackPoint>, variant: Variant) -> Option<RoutePreview> {
+        let analysis = Analysis { points, ..half() };
+        card_with(&analysis, &meta(), variant, Theme::Light).route
+    }
+
+    /// The points of `M x y L x y ...` path data.
+    fn path_points(path: &str) -> Vec<(f32, f32)> {
+        path.split(['M', 'L'])
+            .filter(|step| !step.trim().is_empty())
+            .map(|step| {
+                let numbers: Vec<f32> = step
+                    .split_whitespace()
+                    .map(|n| n.parse().expect("a number"))
+                    .collect();
+                assert_eq!(numbers.len(), 2, "{step:?} in {path}");
+                (numbers[0], numbers[1])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_loop_is_previewed_inside_the_box_right_of_the_legend_flush_right() {
+        let preview = preview_of(lisbon_loop(400), Variant::Ribbon).expect("a preview");
+        let points = path_points(&preview.path);
+        for &(x, y) in &points {
+            assert!(
+                (472.0..=672.0).contains(&x) && (734.0..=790.0).contains(&y),
+                "({x}, {y}) lies outside x 472..672, y 734..790"
+            );
+        }
+        let (left, right) = points
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, r), &(x, _)| (l.min(x), r.max(x)));
+        assert!(
+            (right - 672.0).abs() <= 0.01,
+            "the right-most point is at x {right}"
+        );
+        // Narrower than the box, so it is moved right rather than centred.
+        assert!(left > 472.0 + 50.0, "the left-most point is at x {left}");
+        let start = preview.start;
+        assert!(
+            preview
+                .path
+                .starts_with(&format!("M {:.1} {:.1} L ", start.0, start.1)),
+            "the start {start:?} is not the first point of {}",
+            preview.path
+        );
+    }
+
+    #[test]
+    fn a_route_wider_than_the_box_spans_it_at_mid_height() {
+        let line: Vec<TrackPoint> = (0..=10)
+            .map(|i| TrackPoint {
+                lat: 38.70,
+                lon: -9.15 + 0.001 * f64::from(i),
+                time: None,
+            })
+            .collect();
+        let preview = preview_of(line, Variant::Ribbon).expect("a preview");
+        let points = path_points(&preview.path);
+        assert_eq!(points.first(), Some(&(472.0, 762.0)), "{}", preview.path);
+        assert_eq!(points.last(), Some(&(672.0, 762.0)), "{}", preview.path);
+        assert_eq!(preview.start, (472.0, 762.0));
+    }
+
+    #[test]
+    fn the_preview_is_simplified_to_at_most_120_points() {
+        let preview = preview_of(lisbon_loop(1000), Variant::Ribbon).expect("a preview");
+        let points = preview.path.matches('L').count() + 1;
+        assert!(points <= 120, "{points} points");
+        assert_eq!(points, path_points(&preview.path).len());
+    }
+
+    #[test]
+    fn every_variant_but_trail_carries_the_same_preview() {
+        let ribbon = preview_of(lisbon_loop(400), Variant::Ribbon);
+        assert!(ribbon.is_some());
+        for variant in Variant::ALL {
+            let preview = preview_of(lisbon_loop(400), variant);
+            if variant == Variant::Trail {
+                assert_eq!(preview, None, "the trail already draws the route");
+            } else {
+                assert_eq!(preview, ribbon, "{variant}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_track_without_two_distinct_points_has_no_preview() {
+        let here = TrackPoint {
+            lat: 38.70,
+            lon: -9.15,
+            time: None,
+        };
+        assert_eq!(
+            preview_of(vec![here.clone(), here.clone()], Variant::Ribbon),
+            None
+        );
+        assert_eq!(preview_of(vec![here], Variant::Ribbon), None);
     }
 }

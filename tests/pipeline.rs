@@ -209,3 +209,39 @@ fn every_variant_renders_in_both_themes_at_the_requested_size() {
         }
     }
 }
+
+#[test]
+fn every_variant_but_trail_draws_the_route_preview_once_after_the_legend_in_both_themes() {
+    let pipeline = Pipeline::new().unwrap();
+    for theme in Theme::ALL {
+        for variant in Variant::ALL {
+            let req = CardRequest {
+                variant,
+                theme,
+                ..request()
+            };
+            let svg = pipeline.svg(ten_k().as_bytes(), &req).unwrap();
+            let what = format!("{variant} {theme}");
+            let ink = theme.tokens().ink;
+            let expected = usize::from(variant != Variant::Trail);
+            let thin_paths = svg
+                .split("<path ")
+                .skip(1)
+                .filter(|tag| tag[..tag.find('>').unwrap()].contains(r#"stroke-width="1.5""#))
+                .count();
+            assert_eq!(thin_paths, expected, "{what}: {svg}");
+            let path = format!(
+                r#"fill="none" stroke="{ink}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>"#
+            );
+            let start = format!(r#" r="2.5" fill="{ink}"/>"#);
+            // After the legend, so outside the visualisation the glow repeats.
+            let legend = svg.find(">faster</text>").unwrap();
+            for tag in [&path, &start] {
+                assert_eq!(svg.matches(tag.as_str()).count(), expected, "{what}: {tag}");
+                if let Some(at) = svg.find(tag.as_str()) {
+                    assert!(at > legend, "{what}: {tag} before the legend");
+                }
+            }
+        }
+    }
+}
