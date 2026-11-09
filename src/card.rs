@@ -32,11 +32,11 @@ const TITLE_LINE: Line = Line {
     min_size: 28.0,
     max_width: CONTENT_WIDTH,
 };
-/// The runner's name: Label at 14 px, cut but never shrunk.
+/// The runner's name: Name at 18 px, cut but never shrunk.
 const RUNNER_LINE: Line = Line {
-    role: Role::Label,
-    size: 14.0,
-    min_size: 14.0,
+    role: Role::Name,
+    size: 18.0,
+    min_size: 18.0,
     max_width: CONTENT_WIDTH,
 };
 /// The line under the title: Label at 12 px.
@@ -440,14 +440,14 @@ mod tests {
     fn a_long_name_is_cut_with_an_ellipsis_at_its_size() {
         let runner =
             "Maximilian Alexander Konstantin Oberhauser-Lindqvist zu Hohenzollern-Sigmaringen und Waldburg";
-        assert!(width(Role::Label, runner, 14.0) > 624.0);
+        assert!(width(Role::Name, runner, 18.0) > 624.0);
         let card = card_for(Meta {
             runner: runner.into(),
             ..meta()
         });
         assert_cut_with_one_ellipsis(&card.runner, runner);
-        let fitted = width(Role::Label, &card.runner, 14.0);
-        assert!((624.0 - 16.0..=624.0).contains(&fitted), "{fitted} px");
+        let fitted = width(Role::Name, &card.runner, 18.0);
+        assert!((624.0 - 18.0..=624.0).contains(&fitted), "{fitted} px");
     }
 
     #[test]
