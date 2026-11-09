@@ -11,7 +11,7 @@ the paces are worked out from them.
 ## Usage
 
 ```
-runcard <INPUT.gpx> --runner <NAME> [--event <NAME>] [--city <CITY>] [--date <YYYY-MM-DD>] [-o <OUT.png>] [--scale <F>] [--svg <OUT.svg>] [--timing]
+runcard <INPUT.gpx> --runner <NAME> [--event <NAME>] [--city <CITY>] [--date <YYYY-MM-DD>] [-o <OUT.png>] [--scale <F>] [--variant <NAME>] [--svg <OUT.svg>] [--timing]
 ```
 
 | Flag | Meaning |
@@ -22,6 +22,7 @@ runcard <INPUT.gpx> --runner <NAME> [--event <NAME>] [--city <CITY>] [--date <YY
 | `--date <YYYY-MM-DD>` | Date of the run. Default: the UTC date of the first timestamp, else today. |
 | `-o, --output <OUT.png>` | PNG to write. Default: the input path with a `.png` extension. |
 | `--scale <F>` | Raster scale over the 720x1000 card, must be above 0. Default: `2` (1440x2000). |
+| `--variant <NAME>` | Card look: `classic`, `noir`, `rings`, `route`, `bars` or `mosaic` (`--help` describes each). Default: `classic`. |
 | `--svg <OUT.svg>` | Also write the card as SVG. |
 | `--timing` | Print the time spent in each stage to stderr. |
 
@@ -32,6 +33,21 @@ arguments exit with code 2.
 ```
 runcard examples/sample.gpx --runner "Julia Brandt" --city Berlin
 ```
+
+## Variants
+
+Six looks for the same run, chosen with `--variant` or the `variant` part.
+All six are rendered from `examples/sample.gpx`.
+
+| `classic` | `noir` | `rings` |
+| --- | --- | --- |
+| <img src="examples/classic.png" alt="classic" width="200"> | <img src="examples/noir.png" alt="noir" width="200"> | <img src="examples/rings.png" alt="rings" width="200"> |
+| One stripe per kilometre, coloured by pace. The default. | The classic layout on a dark ground, the stripes glowing. | The kilometres as a ring around the finish time. |
+
+| `route` | `bars` | `mosaic` |
+| --- | --- | --- |
+| <img src="examples/route.png" alt="route" width="200"> | <img src="examples/bars.png" alt="bars" width="200"> | <img src="examples/mosaic.png" alt="mosaic" width="200"> |
+| The route drawn large, each kilometre in its pace colour. | A speed chart: taller bars for faster kilometres, the average dashed. | One tile per kilometre with its pace, like a calendar. |
 
 ## Server
 
@@ -67,6 +83,7 @@ and a blank optional part counts as not given.
 | `date` | Date of the run as `YYYY-MM-DD`. Default: the UTC date of the first timestamp, else today. |
 | `scale` | Raster scale over the 720x1000 card, above 0 and at most 8. Default: `2`. |
 | `format` | `png` or `svg`. Default: `png`. |
+| `variant` | Card look, one of the names `GET /variants` lists. Default: `classic`. |
 
 The answer is the card with status 200, `Content-Type: image/png` (or
 `image/svg+xml; charset=utf-8`) and
@@ -75,7 +92,7 @@ come as JSON, `{"error":"<message>"}`:
 
 | Status | When |
 | --- | --- |
-| 400 | `gpx` or `runner` is missing or empty; `date`, `scale` or `format` is invalid; the multipart body is malformed; the GPX cannot be parsed or analysed (the message says why, e.g. `track has no timestamps, pace cannot be derived`). |
+| 400 | `gpx` or `runner` is missing or empty; `date`, `scale`, `format` or `variant` is invalid; the multipart body is malformed; the GPX cannot be parsed or analysed (the message says why, e.g. `track has no timestamps, pace cannot be derived`). |
 | 413 | The body is larger than `--max-body-mib`. |
 | 415 | The body is not `multipart/form-data`. |
 | 500 | Rendering failed. The message is `rendering failed`; the details go to the log. |
@@ -83,6 +100,12 @@ come as JSON, `{"error":"<message>"}`:
 ```
 curl -F gpx=@run.gpx -F runner="Julia Brandt" -F city=Berlin -o card.png http://localhost:8080/cards
 ```
+
+### `GET /variants`
+
+Answers 200 with the card looks in display order, the default first, each
+with one sentence on how it looks:
+`[{"name":"classic","description":"..."},{"name":"noir","description":"..."},...]`.
 
 ### `GET /health`
 
@@ -104,7 +127,7 @@ cargo build --release
 
 The binaries are `target/release/runcard` (the CLI) and
 `target/release/runcard-server` (the HTTP server). The fonts and the SVG
-template are compiled into both, so they run without any other files.
+templates are compiled into both, so they run without any other files.
 `cargo test` runs the test suite.
 
 ### Docker
@@ -144,5 +167,5 @@ total 13.5 ms
 
 `layout` includes measuring the names against the bundled fonts. `svg` is
 filling the template, `png` rasterising and PNG encoding. Loading the fonts
-and the template before `parse` and writing the files after `png` are not
+and the templates before `parse` and writing the files after `png` are not
 counted; `total` is the sum of the stages.

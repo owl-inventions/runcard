@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use clap::builder::{PossibleValue, PossibleValuesParser, TypedValueParser};
 use clap::Parser;
 use runcard::pipeline::{parse_date, parse_scale, CardRequest, Pipeline};
-use runcard::Error;
+use runcard::{Error, Variant};
 use time::Date;
 
 /// Turns a GPX track into a poster-style PNG card: one coloured stripe per
@@ -37,6 +38,9 @@ struct Args {
     /// Raster scale over the 720x1000 card size.
     #[arg(long, value_name = "F", default_value_t = 2.0, value_parser = parse_scale)]
     scale: f32,
+    /// The card look.
+    #[arg(long, value_name = "NAME", default_value = "classic", value_parser = variant_parser())]
+    variant: Variant,
     /// Also write the SVG to this path.
     #[arg(long, value_name = "OUT.svg")]
     svg: Option<PathBuf>,
@@ -60,6 +64,7 @@ fn run(args: Args) -> Result<()> {
         city: args.city,
         date: args.date,
         scale: args.scale,
+        variant: args.variant,
     };
     let rendered = pipeline
         .render(BufReader::new(file), &request)
@@ -77,6 +82,14 @@ fn run(args: Args) -> Result<()> {
         eprint!("{}", timing_report(&rendered.timings, total));
     }
     Ok(())
+}
+
+/// Accepts the variant names only, listing each with its description in `--help`.
+fn variant_parser() -> impl TypedValueParser<Value = Variant> {
+    PossibleValuesParser::new(
+        Variant::ALL.map(|variant| PossibleValue::new(variant.name()).help(variant.description())),
+    )
+    .try_map(|name| name.parse::<Variant>())
 }
 
 /// `error` with the pipeline stage it came from as context.

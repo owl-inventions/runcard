@@ -2,7 +2,8 @@
 
 mod common;
 
-use runcard::{format, geo, gpx, splits};
+use runcard::pipeline::{CardRequest, Pipeline};
+use runcard::{format, geo, gpx, splits, Variant};
 use time::macros::datetime;
 use time::OffsetDateTime;
 
@@ -69,8 +70,15 @@ fn the_synthetic_route_is_a_closed_loop_heading_east_first() {
     );
 }
 
+/// `examples/<name>` in the crate.
+fn example(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join(name)
+}
+
 fn sample_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/sample.gpx")
+    example("sample.gpx")
 }
 
 #[test]
@@ -113,11 +121,32 @@ const SAMPLE_PACES: [f64; 43] = [
     350.0, 344.0, 310.0,
 ];
 
-/// Regenerates `examples/sample.gpx`: `cargo test --test data -- --ignored`.
+/// Regenerates `examples/sample.gpx` and the cards rendered from it, as the
+/// CLI renders them for `--runner "Julia Brandt" --city Berlin`:
+/// `examples/<variant>.png` for every variant at scale 1 and
+/// `examples/sample.png`, the classic card at scale 2. Run with
+/// `cargo test --test data -- --ignored`.
 #[test]
-#[ignore = "writes examples/sample.gpx; run once after changing SAMPLE_PACES"]
-fn generate_sample_gpx() {
+#[ignore = "writes examples/sample.gpx and the example PNGs; run after changing SAMPLE_PACES or a template"]
+fn generate_samples() {
     let pace = |km: u32| SAMPLE_PACES[km as usize - 1];
     let xml = common::synthetic_gpx_every(100.0, MARATHON_M, pace, START);
-    std::fs::write(sample_path(), xml).unwrap();
+    std::fs::write(sample_path(), &xml).unwrap();
+
+    let pipeline = Pipeline::new().unwrap();
+    let card = |variant: Variant, scale: f32| {
+        let request = CardRequest {
+            runner: "Julia Brandt".into(),
+            event: None,
+            city: Some("Berlin".into()),
+            date: None,
+            scale,
+            variant,
+        };
+        pipeline.png(xml.as_bytes(), &request).unwrap()
+    };
+    for variant in Variant::ALL {
+        std::fs::write(example(&format!("{variant}.png")), card(variant, 1.0)).unwrap();
+    }
+    std::fs::write(example("sample.png"), card(Variant::Classic, 2.0)).unwrap();
 }

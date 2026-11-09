@@ -9,7 +9,7 @@ use std::process::{Command, Output};
 use runcard::palette::Palette;
 use runcard::render::Renderer;
 use runcard::text::TextMeasure;
-use runcard::{card, gpx, splits, Meta};
+use runcard::{card, gpx, splits, Meta, Variant};
 use time::macros::{date, datetime};
 use time::OffsetDateTime;
 
@@ -75,7 +75,13 @@ fn a_synthetic_marathon_renders_to_a_card_with_km_30_in_the_fastest_colour() {
         city: Some("Berlin".into()),
         date: date!(2026 - 09 - 27),
     };
-    let data = card::build(&analysis, &meta, &Palette::new(), &TextMeasure::new());
+    let data = card::build(
+        &analysis,
+        &meta,
+        &Palette::light(),
+        &TextMeasure::new(),
+        Variant::Classic,
+    );
     let renderer = Renderer::new().unwrap();
     let svg = renderer.svg(&data).unwrap();
     let image = Image::decode(&renderer.png(&svg, SCALE).unwrap());
@@ -113,7 +119,13 @@ fn a_run_under_a_kilometre_has_no_km_axis_label_and_no_empty_fastest_line() {
         city: None,
         date: date!(2026 - 09 - 27),
     };
-    let data = card::build(&analysis, &meta, &Palette::new(), &TextMeasure::new());
+    let data = card::build(
+        &analysis,
+        &meta,
+        &Palette::light(),
+        &TextMeasure::new(),
+        Variant::Classic,
+    );
     assert!(
         data.ticks.is_empty() && data.fastest_line.is_empty(),
         "{data:?}"
@@ -142,7 +154,13 @@ fn long_names_and_titles_stay_inside_the_card() {
         city: Some("Paris".into()),
         date: date!(2026 - 04 - 12),
     };
-    let data = card::build(&analysis, &meta, &Palette::new(), &TextMeasure::new());
+    let data = card::build(
+        &analysis,
+        &meta,
+        &Palette::light(),
+        &TextMeasure::new(),
+        Variant::Classic,
+    );
     let image = Image::decode(&Renderer::new().unwrap().render(&data, SCALE).unwrap());
 
     assert!(
@@ -284,4 +302,44 @@ fn an_invalid_gpx_fails_with_exit_code_1_and_names_the_file() {
         "{stderr}"
     );
     assert!(stderr.contains("invalid gpx"), "{stderr}");
+}
+
+#[test]
+fn the_binary_renders_the_variant_it_is_given() {
+    let png = output_path("cli-noir.png");
+    let output = runcard(&[
+        sample_gpx().as_os_str(),
+        "--runner".as_ref(),
+        "Julia Brandt".as_ref(),
+        "--variant".as_ref(),
+        "noir".as_ref(),
+        "--scale".as_ref(),
+        "1".as_ref(),
+        "-o".as_ref(),
+        png.as_os_str(),
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{}\n{stderr}", output.status);
+    let image = Image::decode(&std::fs::read(&png).expect("the png is written"));
+    assert_eq!((image.width, image.height), (720, 1000));
+    assert_eq!(image.pixel(0, 0), rgb_of("#0f1115"));
+}
+
+#[test]
+fn an_unknown_variant_exits_with_code_2_listing_the_variants() {
+    let output = runcard(&[
+        sample_gpx().as_os_str(),
+        "--runner".as_ref(),
+        "Julia Brandt".as_ref(),
+        "--variant".as_ref(),
+        "nope".as_ref(),
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("'nope'"), "{stderr}");
+    assert!(stderr.contains("--variant"), "{stderr}");
+    assert!(
+        stderr.contains("classic, noir, rings, route, bars, mosaic"),
+        "{stderr}"
+    );
 }

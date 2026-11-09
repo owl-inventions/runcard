@@ -1,4 +1,5 @@
-//! `runcard-server`: the card pipeline over HTTP (`POST /cards`, `GET /health`).
+//! `runcard-server`: the card pipeline over HTTP (`POST /cards`, `GET /variants`,
+//! `GET /health`).
 
 use std::io::IsTerminal;
 use std::sync::Arc;

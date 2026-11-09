@@ -39,7 +39,7 @@ pub fn outline(points: &[TrackPoint], bbox: BBox, max_points: usize) -> Vec<(f32
 /// Equirectangular projection around the mean latitude, y growing southwards.
 /// Longitudes are taken within 180 degrees of the first point's, so a route
 /// across the antimeridian stays in one piece.
-fn project(points: &[TrackPoint]) -> Vec<(f64, f64)> {
+pub(crate) fn project(points: &[TrackPoint]) -> Vec<(f64, f64)> {
     let Some(first) = points.first() else {
         return Vec::new();
     };
@@ -51,7 +51,7 @@ fn project(points: &[TrackPoint]) -> Vec<(f64, f64)> {
 
 /// Scales and translates projected points into `bbox`, keeping the aspect ratio
 /// and centring the shorter side.
-fn fit(points: &[(f64, f64)], bbox: BBox) -> Vec<(f32, f32)> {
+pub(crate) fn fit(points: &[(f64, f64)], bbox: BBox) -> Vec<(f32, f32)> {
     let Some(&(x, y)) = points.first() else {
         return Vec::new();
     };

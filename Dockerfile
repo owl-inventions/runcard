@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cp target/release/runcard-server /runcard-server
 
 # Runtime stage: a distroless image with libc and libgcc only. The fonts and
-# the card template are compiled into the binary, so nothing else is needed.
+# the card templates are compiled into the binary, so nothing else is needed.
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /runcard-server /runcard-server
 ENV RUNCARD_BIND=0.0.0.0:8080

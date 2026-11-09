@@ -2,8 +2,10 @@
 
 mod common;
 
+use std::path::Path;
+
 use runcard::pipeline::{CardRequest, Pipeline};
-use runcard::Error;
+use runcard::{Error, Variant};
 use time::macros::{date, datetime};
 use time::OffsetDateTime;
 
@@ -20,6 +22,7 @@ fn request() -> CardRequest {
         city: None,
         date: None,
         scale: 2.0,
+        variant: Variant::default(),
     }
 }
 
@@ -112,4 +115,86 @@ fn malformed_xml_is_the_gpx_error() {
         .svg("<gpx version=\"1.1\"><trk>".as_bytes(), &request())
         .unwrap_err();
     assert!(matches!(error, Error::Gpx(_)), "{error:?}");
+}
+
+/// Width, height and RGB bytes of a PNG.
+fn decode(png_bytes: &[u8]) -> (u32, u32, Vec<u8>) {
+    let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
+    let mut reader = decoder.read_info().expect("a valid png header");
+    let mut buf = vec![0; reader.output_buffer_size().expect("a sane png size")];
+    let info = reader.next_frame(&mut buf).expect("a valid png frame");
+    assert_eq!(info.color_type, png::ColorType::Rgb);
+    buf.truncate(info.buffer_size());
+    (info.width, info.height, buf)
+}
+
+fn example(name: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join(name)
+}
+
+#[test]
+fn the_default_request_renders_the_classic_sample_card_unchanged() {
+    let gpx = std::fs::read(example("sample.gpx")).unwrap();
+    let req = CardRequest {
+        city: Some("Berlin".into()),
+        ..request()
+    };
+    let pipeline = Pipeline::new().unwrap();
+    let classic = CardRequest {
+        variant: Variant::Classic,
+        ..req.clone()
+    };
+    assert_eq!(
+        pipeline.svg(&gpx[..], &req).unwrap(),
+        pipeline.svg(&gpx[..], &classic).unwrap()
+    );
+
+    let (width, height, actual) = decode(&pipeline.png(&gpx[..], &req).unwrap());
+    let (_, _, expected) = decode(&std::fs::read(example("sample.png")).unwrap());
+    assert_eq!((width, height), (1440, 2000));
+    let worst = actual
+        .iter()
+        .zip(&expected)
+        .map(|(a, e)| a.abs_diff(*e))
+        .max();
+    assert!(
+        actual.len() == expected.len() && worst <= Some(2),
+        "the card differs from examples/sample.png by up to {worst:?} per channel"
+    );
+}
+
+#[test]
+fn noir_takes_the_dark_theme_and_the_dark_palette() {
+    let pipeline = Pipeline::new().unwrap();
+    let noir = CardRequest {
+        variant: Variant::Noir,
+        ..request()
+    };
+    let svg = pipeline.svg(ten_k().as_bytes(), &noir).unwrap();
+    assert!(svg.contains("feGaussianBlur"), "{svg}");
+    assert!(svg.contains(r##"fill="#0f1115""##), "{svg}");
+    // The slowest swatch of the legend: violet, not the light scale's slate.
+    assert!(svg.contains(r##"fill="#3b2a6b""##), "{svg}");
+    assert!(!svg.contains("#2c4a5e"), "{svg}");
+
+    let classic = pipeline.svg(ten_k().as_bytes(), &request()).unwrap();
+    assert!(classic.contains(r##"fill="#2c4a5e""##), "{classic}");
+    assert!(!classic.contains("#3b2a6b"), "{classic}");
+}
+
+#[test]
+fn every_variant_renders_a_card_of_the_requested_size() {
+    let pipeline = Pipeline::new().unwrap();
+    for variant in Variant::ALL {
+        let req = CardRequest {
+            variant,
+            scale: 1.0,
+            ..request()
+        };
+        let rendered = pipeline.render(ten_k().as_bytes(), &req).unwrap();
+        assert!(rendered.svg.contains(">JULIA BRANDT</text>"), "{variant}");
+        assert_eq!(png_size(&rendered.png), (720, 1000), "{variant}");
+    }
 }

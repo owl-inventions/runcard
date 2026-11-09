@@ -23,7 +23,12 @@ pub fn duration(s: f64) -> String {
 
 /// Pace rounded to whole seconds: `5:39 /km`.
 pub fn pace(s_per_km: f64) -> String {
-    format!("{} /km", minutes_seconds(whole_seconds(s_per_km)))
+    format!("{} /km", pace_short(s_per_km))
+}
+
+/// Pace rounded to whole seconds, without the unit: `5:39`.
+pub fn pace_short(s_per_km: f64) -> String {
+    minutes_seconds(whole_seconds(s_per_km))
 }
 
 /// Pace in capitals for the fastest-split line: `5:16 /KM`.
@@ -94,6 +99,12 @@ mod tests {
         assert_eq!(pace(5.0 * 60.0 + 39.0), "5:39 /km");
         assert_eq!(pace(339.4), "5:39 /km");
         assert_eq!(pace(359.6), "6:00 /km");
+    }
+
+    #[test]
+    fn pace_short_is_the_pace_without_the_unit() {
+        assert_eq!(pace_short(302.0), "5:02");
+        assert_eq!(pace_short(359.6), "6:00");
     }
 
     #[test]
