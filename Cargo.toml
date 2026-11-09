@@ -18,7 +18,7 @@ resvg = "0.49"
 usvg = "0.49"
 tiny-skia = "0.12"
 fontdb = "0.24"
-skrifa = "0.44"
+skrifa = "0.49"
 minijinja = "3"
 serde = { version = "1", features = ["derive"] }
 colorgrad = "0.9"
