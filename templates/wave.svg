@@ -1,0 +1,17 @@
+{% extends "frame.svg" %}
+{% block viz %}
+{%- if wave %}
+{%- if wave.fill %}
+    <path d="{{ wave.fill }}" fill="{{ theme.ink }}" opacity="0.06"/>
+{%- endif %}
+    <line x1="{{ wave.line_from }}" y1="{{ wave.avg_y }}" x2="{{ wave.line_to }}" y2="{{ wave.avg_y }}" stroke="{{ theme.muted }}" stroke-width="1" stroke-dasharray="4 4"/>
+{%- for section in wave.sections %}
+    <path d="{{ section.d }}" fill="none" stroke="{{ section.color }}" stroke-width="4" stroke-linecap="round"/>
+{%- endfor %}
+{#- The label goes over the curve; on a paper halo when the curve runs through it. #}
+    <text x="{{ wave.label.x }}" y="{{ wave.label.y }}" text-anchor="end" {{ font.label }} font-size="11" fill="{{ theme.muted }}"{% if wave.label.halo %} stroke="{{ theme.paper }}" stroke-width="4" stroke-linejoin="round" paint-order="stroke"{% endif %}>average</text>
+{%- if wave.fastest %}
+    <circle cx="{{ wave.fastest.x }}" cy="{{ wave.fastest.y }}" r="5" fill="{{ theme.ink }}"/>
+{%- endif %}
+{%- endif %}
+{% endblock %}

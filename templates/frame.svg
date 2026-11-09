@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1000" viewBox="0 0 720 1000">
+{%- if theme.dark %}
+  <defs>
+    <filter id="glow" x="-15%" y="-30%" width="130%" height="160%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+{%- endif %}
+  <rect x="0" y="0" width="720" height="1000" fill="{{ theme.paper }}"/>
+
+  <text x="48" y="92" {{ font.display }} font-size="{{ title_size }}" fill="{{ theme.ink }}">{{ title }}</text>
+  <text x="48" y="118" {{ font.label }} font-size="12" fill="{{ theme.muted }}">{{ subline }}</text>
+{#- The visualisation zone, y 160 to 720. On dark paper a blurred copy of it
+    goes first, so the shapes glow; the variant templates do not know. #}
+{%- set viz %}{% block viz %}{% endblock %}{% endset %}
+{%- if theme.dark %}
+  <g filter="url(#glow)" opacity="0.35">{{ viz }}</g>
+{%- endif %}
+  <g>{{ viz }}</g>
+
+  <g>
+{%- for color in legend %}
+    <rect x="{{ 48 + loop.index0 * 5 }}" y="760" width="5" height="3" fill="{{ color }}"/>
+{%- endfor %}
+  </g>
+  <text x="48" y="780" {{ font.label }} font-size="11" fill="{{ theme.muted }}">slower</text>
+  <text x="208" y="780" text-anchor="end" {{ font.label }} font-size="11" fill="{{ theme.muted }}">faster</text>
+
+  <rect x="48" y="800" width="624" height="1" fill="{{ theme.rule }}"/>
+
+  <text x="48" y="884" {{ font.numeral }} font-size="72" fill="{{ theme.ink }}">{{ time }}</text>
+  <text x="420" y="836" {{ font.label }} font-size="11" fill="{{ theme.muted }}">distance</text>
+  <text x="672" y="836" text-anchor="end" {{ font.text }} font-size="20" fill="{{ theme.ink }}">{{ distance }}</text>
+  <text x="420" y="868" {{ font.label }} font-size="11" fill="{{ theme.muted }}">pace</text>
+  <text x="672" y="868" text-anchor="end" {{ font.text }} font-size="20" fill="{{ theme.ink }}">{{ pace }}</text>
+{%- if fastest %}
+  <text x="420" y="900" {{ font.label }} font-size="11" fill="{{ theme.muted }}">fastest</text>
+  <text x="672" y="900" text-anchor="end" {{ font.text }} font-size="20" fill="{{ theme.ink }}">{{ fastest }}</text>
+{%- endif %}
+
+  <text x="48" y="936" {{ font.label }} font-size="14" fill="{{ theme.ink }}">{{ runner }}</text>
+</svg>

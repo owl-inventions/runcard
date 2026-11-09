@@ -3,7 +3,10 @@
 use serde::Serialize;
 use time::{Date, OffsetDateTime};
 
-use crate::layout::{bars::Bars, mosaic::Mosaic, rings::Rings, route_hero::RouteHero};
+use crate::layout::{
+    dots::Dots, ledger::Ledger, ribbon::Ribbon, spiral::Spiral, trail::Trail, wave::Wave,
+};
+use crate::theme::Tokens;
 
 /// One recorded GPS fix.
 #[derive(Debug, Clone, PartialEq)]
@@ -68,15 +71,6 @@ pub struct Meta {
     pub date: Date,
 }
 
-/// One coloured band of the stripe bar.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Stripe {
-    /// Width in card pixels.
-    pub width: f32,
-    /// CSS colour, e.g. `#d94f30`.
-    pub color: String,
-}
-
 /// One kilometre as the shape variants draw it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SplitView {
@@ -84,7 +78,7 @@ pub struct SplitView {
     pub index: u32,
     /// Pace without the unit, e.g. `5:02`.
     pub pace: String,
-    /// CSS colour of the pace, the same as the kilometre's stripe.
+    /// CSS colour of the pace on the palette.
     pub color: String,
     /// True for the trailing split that is shorter than a kilometre.
     pub partial: bool,
@@ -94,81 +88,48 @@ pub struct SplitView {
     pub t: f32,
 }
 
-/// The colours of a card variant as CSS hex strings, e.g. `#f4efe6`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct Theme {
-    /// The background.
-    pub paper: &'static str,
-    /// Text, lines and markers.
-    pub ink: &'static str,
-    /// Secondary labels.
-    pub muted: &'static str,
-    /// Highlights such as the route start.
-    pub accent: &'static str,
-}
-
-impl Theme {
-    /// Near-black ink on cream paper with an orange accent.
-    pub const fn light() -> Self {
-        Self {
-            paper: "#f4efe6",
-            ink: "#1b1b1b",
-            muted: "#8a8580",
-            accent: "#e8601c",
-        }
-    }
-
-    /// Cream ink on near-black paper with a red-orange accent.
-    pub const fn dark() -> Self {
-        Self {
-            paper: "#0f1115",
-            ink: "#f4efe6",
-            muted: "#7d8590",
-            accent: "#ff5a36",
-        }
-    }
-}
-
-/// The minijinja context for `templates/<variant>.svg`: every value already
-/// laid out (card pixel coordinates) and formatted (display strings).
+/// The minijinja context for `templates/<variant>.svg` and the shared
+/// `templates/frame.svg`: every value already laid out (card pixels) and
+/// formatted (display strings).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CardData {
-    pub header: String,
-    pub date: String,
-    pub title: String,
-    /// Font size of the title in px, smaller than 48 for a long event name.
-    pub title_size: f32,
-    pub runner: String,
-    /// Font size of the runner's name in px, smaller than 76 for a long name.
-    pub runner_size: f32,
-    pub stripes: Vec<Stripe>,
-    /// Horizontal position of the fastest-split marker.
-    pub fastest_x: Option<f32>,
-    /// Kilometre ticks under the stripe bar: (x position, kilometre number).
-    pub ticks: Vec<(f32, u32)>,
-    /// Route outline as a polyline in card coordinates.
-    pub route: Vec<(f32, f32)>,
-    /// Start marker of the route in card coordinates.
-    pub route_start: (f32, f32),
-    pub legend: Vec<String>,
-    pub fastest_line: String,
-    pub distance: String,
-    pub time: String,
-    pub pace: String,
     /// Name of the variant, which is also its template's name.
     pub variant: &'static str,
-    pub theme: Theme,
+    /// The colours of the chosen theme.
+    pub theme: Tokens,
+    /// The event title, cut with an ellipsis if it does not fit even at 28 px.
+    pub title: String,
+    /// Font size of the title in px: 40, smaller for a long title, at least 28.
+    pub title_size: f32,
+    /// `<city> · <date>` under the title, the city cut first to fit, e.g.
+    /// `Paris · 8 March 2026`; just the date without a city.
+    pub subline: String,
+    /// The colours of the legend bar, slowest first.
+    pub legend: Vec<String>,
+    /// The finish time, e.g. `1:48:58`.
+    pub time: String,
+    /// The distance, e.g. `21.46 km`.
+    pub distance: String,
+    /// The average pace over the whole distance, e.g. `5:43 /km`.
+    pub pace: String,
+    /// The fastest full kilometre and its pace, e.g. `km 11 · 5:02`; empty
+    /// without a full kilometre.
+    pub fastest: String,
+    /// The runner's name as typed, cut with an ellipsis if it does not fit.
+    pub runner: String,
     /// One view per split, in order.
     pub splits: Vec<SplitView>,
     /// Position of the average pace on the colour scale.
     pub avg_t: f32,
-    /// Average pace over the whole distance without the unit, e.g. `5:39`.
+    /// Average pace over the whole distance without the unit, e.g. `5:43`.
     pub avg_pace: String,
     /// Shape blocks, each filled only for its own variant.
-    pub rings: Option<Rings>,
-    pub route_hero: Option<RouteHero>,
-    pub bars: Option<Bars>,
-    pub mosaic: Option<Mosaic>,
+    pub ribbon: Option<Ribbon>,
+    pub spiral: Option<Spiral>,
+    pub trail: Option<Trail>,
+    pub dots: Option<Dots>,
+    pub wave: Option<Wave>,
+    pub ledger: Option<Ledger>,
 }
 
 #[cfg(test)]
@@ -194,23 +155,5 @@ mod tests {
     fn pace_of_a_partial_split_is_scaled_to_a_kilometre() {
         let pace = split(195.0, 60.0).pace_s_per_km();
         assert!((pace - 307.7).abs() < 0.01, "pace was {pace}");
-    }
-
-    #[test]
-    fn the_light_theme_is_ink_on_cream_with_an_orange_accent() {
-        let theme = Theme::light();
-        assert_eq!(
-            (theme.paper, theme.ink, theme.muted, theme.accent),
-            ("#f4efe6", "#1b1b1b", "#8a8580", "#e8601c")
-        );
-    }
-
-    #[test]
-    fn the_dark_theme_is_cream_on_near_black_with_a_red_accent() {
-        let theme = Theme::dark();
-        assert_eq!(
-            (theme.paper, theme.ink, theme.muted, theme.accent),
-            ("#0f1115", "#f4efe6", "#7d8590", "#ff5a36")
-        );
     }
 }

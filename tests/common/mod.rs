@@ -12,10 +12,45 @@ use time::{Duration, OffsetDateTime};
 
 pub const START_LAT: f64 = 52.5;
 pub const START_LON: f64 = 13.4;
-pub const TRACK_NAME: &str = "Berlin Marathon";
+pub const TRACK_NAME: &str = "Harbour Half";
 
-/// A GPX 1.1 document with one track, "Berlin Marathon": a rounded-rectangle loop
-/// of `total_m` metres starting at 52.5 N, 13.4 E, with a point every 50 m timed
+/// Where and how a synthetic track runs.
+#[derive(Debug, Clone, Copy)]
+pub struct Course {
+    /// The track's `<name>`.
+    pub name: &'static str,
+    /// Latitude and longitude of the first point.
+    pub start: (f64, f64),
+    /// Metres between neighbouring points.
+    pub step_m: f64,
+    pub shape: Shape,
+}
+
+/// The outline of a closed course, scaled to the track's length.
+#[derive(Debug, Clone, Copy)]
+pub enum Shape {
+    /// A counter-clockwise rounded rectangle, heading east first.
+    RoundedRectangle,
+    /// Straight legs through these (east, north) waypoints and back to the
+    /// first one, in any unit.
+    Waypoints(&'static [(f64, f64)]),
+}
+
+impl Course {
+    /// "Harbour Half", a rounded-rectangle loop from 38.7 N, 9.1 W with a
+    /// point every `step_m` metres.
+    pub fn loop_every(step_m: f64) -> Self {
+        Self {
+            name: TRACK_NAME,
+            start: (START_LAT, START_LON),
+            step_m,
+            shape: Shape::RoundedRectangle,
+        }
+    }
+}
+
+/// A GPX 1.1 document with one track, "Harbour Half": a rounded-rectangle loop
+/// of `total_m` metres starting at 38.7 N, 9.1 W, with a point every 50 m timed
 /// by `pace_for_km` (seconds per kilometre, for 1-based kilometre numbers).
 pub fn synthetic_gpx(
     total_m: f64,
@@ -32,15 +67,33 @@ pub fn synthetic_gpx_every(
     pace_for_km: impl Fn(u32) -> f64,
     start: OffsetDateTime,
 ) -> String {
-    let points = loop_route(total_m, step_m);
+    course_gpx(&Course::loop_every(step_m), total_m, pace_for_km, start)
+}
+
+/// The pace function of a per-kilometre list: kilometre k at `paces[k - 1]`
+/// seconds per kilometre, the last entry for any kilometre beyond the list.
+pub fn paces(paces: &'static [f64]) -> impl Fn(u32) -> f64 {
+    move |km: u32| paces[(km as usize).clamp(1, paces.len()) - 1]
+}
+
+/// A GPX 1.1 document with one track along `course`, `total_m` metres long
+/// and timed by `pace_for_km`, starting at `start`.
+pub fn course_gpx(
+    course: &Course,
+    total_m: f64,
+    pace_for_km: impl Fn(u32) -> f64,
+    start: OffsetDateTime,
+) -> String {
+    let points = course_points(course, total_m);
     let distances = geo::cumulative_m(&points);
     let mut xml = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <gpx version=\"1.1\" creator=\"runcard synthetic fixture\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n\
          \x20 <trk>\n\
-         \x20   <name>{TRACK_NAME}</name>\n\
+         \x20   <name>{}</name>\n\
          \x20   <type>running</type>\n\
-         \x20   <trkseg>\n"
+         \x20   <trkseg>\n",
+        course.name
     );
     for (point, distance) in points.iter().zip(distances) {
         let offset = Duration::seconds(elapsed_s(distance, &pace_for_km).round() as i64);
@@ -79,29 +132,61 @@ pub fn write_fixture(name: &str, xml: &str) -> PathBuf {
     path
 }
 
-/// Points every `step_m` along the loop whose measured (haversine) length is `total_m`.
-fn loop_route(total_m: f64, step_m: f64) -> Vec<TrackPoint> {
+/// Points every `course.step_m` along the course whose measured (haversine)
+/// length is `total_m`.
+fn course_points(course: &Course, total_m: f64) -> Vec<TrackPoint> {
     // Chords cut the corners, so the points measure a little shorter than the
-    // drawn loop; a few rounds of rescaling make the measured length match.
+    // drawn course; a few rounds of rescaling make the measured length match.
     let mut perimeter = total_m;
-    let mut points = sample_loop(perimeter, total_m, step_m);
+    let mut points = sample_course(course, perimeter, total_m);
     for _ in 0..3 {
         let measured = geo::cumulative_m(&points)[points.len() - 1];
         perimeter *= total_m / measured;
-        points = sample_loop(perimeter, total_m, step_m);
+        points = sample_course(course, perimeter, total_m);
     }
     points
 }
 
-fn sample_loop(perimeter: f64, total_m: f64, step_m: f64) -> Vec<TrackPoint> {
-    let steps = (total_m / step_m).ceil() as u32;
+fn sample_course(course: &Course, perimeter: f64, total_m: f64) -> Vec<TrackPoint> {
+    let steps = (total_m / course.step_m).ceil() as u32;
     (0..=steps)
         .map(|i| {
-            let fraction = (f64::from(i) * step_m / total_m).min(1.0);
-            let (east, north) = rounded_rectangle(fraction * perimeter, perimeter);
-            to_track_point(east, north)
+            let fraction = (f64::from(i) * course.step_m / total_m).min(1.0);
+            let s = fraction * perimeter;
+            let (east, north) = match course.shape {
+                Shape::RoundedRectangle => rounded_rectangle(s, perimeter),
+                Shape::Waypoints(waypoints) => along_waypoints(waypoints, s, perimeter),
+            };
+            to_track_point(course.start, east, north)
         })
         .collect()
+}
+
+/// Metres east and north of the first waypoint after `s` metres along the
+/// closed polygon through `waypoints`, scaled to `perimeter` metres.
+fn along_waypoints(waypoints: &[(f64, f64)], s: f64, perimeter: f64) -> (f64, f64) {
+    let legs: Vec<((f64, f64), (f64, f64))> = waypoints
+        .iter()
+        .zip(waypoints.iter().cycle().skip(1))
+        .map(|(&a, &b)| (a, b))
+        .collect();
+    let length = |((ax, ay), (bx, by)): ((f64, f64), (f64, f64))| (bx - ax).hypot(by - ay);
+    let scale = perimeter / legs.iter().map(|&leg| length(leg)).sum::<f64>();
+    let (x0, y0) = waypoints[0];
+    let mut rest = s / scale;
+    for &leg in &legs {
+        let ((ax, ay), (bx, by)) = leg;
+        let along = length(leg);
+        if rest <= along {
+            let f = rest / along;
+            return (
+                (ax + (bx - ax) * f - x0) * scale,
+                (ay + (by - ay) * f - y0) * scale,
+            );
+        }
+        rest -= along;
+    }
+    (0.0, 0.0)
 }
 
 /// Metres east and north of the start after `s` metres along a counter-clockwise
@@ -129,11 +214,12 @@ fn rounded_rectangle(s: f64, perimeter: f64) -> (f64, f64) {
     (east, north)
 }
 
-/// Converts local metres to a point, rounded to the 7 decimals written to the GPX.
-fn to_track_point(east: f64, north: f64) -> TrackPoint {
+/// Converts metres east and north of `start` to a point, rounded to the 7
+/// decimals written to the GPX.
+fn to_track_point((start_lat, start_lon): (f64, f64), east: f64, north: f64) -> TrackPoint {
     let metres_per_degree = EARTH_RADIUS_M.to_radians();
-    let lat = START_LAT + north / metres_per_degree;
-    let lon = START_LON + east / (metres_per_degree * lat.to_radians().cos());
+    let lat = start_lat + north / metres_per_degree;
+    let lon = start_lon + east / (metres_per_degree * lat.to_radians().cos());
     TrackPoint {
         lat: round7(lat),
         lon: round7(lon),

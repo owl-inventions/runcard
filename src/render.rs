@@ -1,25 +1,32 @@
-//! Renders the card: fills the variant's SVG template with minijinja, rasterises it with resvg, encodes the PNG.
+//! Renders the card: fills the variant's SVG template, which extends the
+//! shared frame, with minijinja, rasterises it with resvg, encodes the PNG.
 
 use std::sync::Arc;
 
-use minijinja::{context, AutoEscape, Environment, Value};
+use minijinja::{context, AutoEscape, Environment, ErrorKind, Output, State, Value};
 
 use crate::error::{Error, Result};
-use crate::layout::{bars::Bars, mosaic::Mosaic, rings::Rings, route_hero::RouteHero};
-use crate::model::{CardData, Theme};
-use crate::route;
-use crate::text::Font;
+use crate::layout::{
+    dots::Dots, ledger::Ledger, ribbon::Ribbon, spiral::Spiral, trail::Trail, wave::Wave,
+};
+use crate::model::CardData;
+use crate::text::{Face, Role};
+use crate::theme::Tokens;
 use crate::variant::Variant;
+
+/// The shared frame every variant template extends: title block, legend,
+/// footer and, in the dark theme, the glow under the visualisation.
+const FRAME: &str = include_str!("../templates/frame.svg");
 
 /// The file name and the source of the template of `variant`, compiled in.
 fn template(variant: Variant) -> (&'static str, &'static str) {
     match variant {
-        Variant::Classic => ("classic.svg", include_str!("../templates/classic.svg")),
-        Variant::Noir => ("noir.svg", include_str!("../templates/noir.svg")),
-        Variant::Rings => ("rings.svg", include_str!("../templates/rings.svg")),
-        Variant::Route => ("route.svg", include_str!("../templates/route.svg")),
-        Variant::Bars => ("bars.svg", include_str!("../templates/bars.svg")),
-        Variant::Mosaic => ("mosaic.svg", include_str!("../templates/mosaic.svg")),
+        Variant::Ribbon => ("ribbon.svg", include_str!("../templates/ribbon.svg")),
+        Variant::Spiral => ("spiral.svg", include_str!("../templates/spiral.svg")),
+        Variant::Trail => ("trail.svg", include_str!("../templates/trail.svg")),
+        Variant::Dots => ("dots.svg", include_str!("../templates/dots.svg")),
+        Variant::Wave => ("wave.svg", include_str!("../templates/wave.svg")),
+        Variant::Ledger => ("ledger.svg", include_str!("../templates/ledger.svg")),
     }
 }
 
@@ -30,18 +37,20 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Loads the templates of every variant and the fonts.
+    /// Loads the frame, the templates of every variant and the fonts.
     pub fn new() -> Result<Self> {
         let mut env = Environment::new();
         env.set_auto_escape_callback(|_| AutoEscape::Html);
+        env.set_formatter(xml_formatter);
+        env.add_template("frame.svg", FRAME)?;
         for variant in Variant::ALL {
             let (name, source) = template(variant);
             env.add_template(name, source)?;
         }
 
         let mut fontdb = fontdb::Database::new();
-        for font in Font::ALL {
-            fontdb.load_font_source(fontdb::Source::Binary(Arc::new(font.data())));
+        for face in Face::ALL {
+            fontdb.load_font_source(fontdb::Source::Binary(Arc::new(face.data())));
         }
         let opts = usvg::Options {
             fontdb: Arc::new(fontdb),
@@ -78,16 +87,12 @@ impl Renderer {
     }
 }
 
-/// The template context: the fields of `CardData`, with the route as SVG path
-/// data (`route_path`) and the user-given texts (header, title, runner) cleared
-/// of characters XML forbids. Built by hand because minijinja's `serde`
-/// feature is off; each shape block builds its own value.
+/// The template context: the fields of `CardData` with the numbers rounded,
+/// the user-given texts (title, subline, runner) cleared of characters XML
+/// forbids, and `font.<role>` holding the SVG attributes of each type role.
+/// Built by hand because minijinja's `serde` feature is off; each shape block
+/// builds its own value.
 fn template_context(data: &CardData) -> Value {
-    let stripes: Vec<Value> = data
-        .stripes
-        .iter()
-        .map(|s| context! { width => px(s.width), color => &s.color })
-        .collect();
     let splits: Vec<Value> = data
         .splits
         .iter()
@@ -102,47 +107,53 @@ fn template_context(data: &CardData) -> Value {
             }
         })
         .collect();
-    let ticks: Vec<Value> = data
-        .ticks
-        .iter()
-        .map(|&(x, km)| Value::from(vec![px(x), Value::from(km)]))
-        .collect();
-    let point = |(x, y): (f32, f32)| Value::from(vec![px(x), px(y)]);
     context! {
-        header => xml_chars(&data.header),
-        date => &data.date,
-        title => xml_chars(&data.title),
-        title_size => px(data.title_size),
-        runner => xml_chars(&data.runner),
-        runner_size => px(data.runner_size),
-        stripes => stripes,
-        fastest_x => data.fastest_x.map(px),
-        ticks => ticks,
-        route_start => point(data.route_start),
-        route_path => route::to_path(&data.route),
-        legend => &data.legend,
-        fastest_line => &data.fastest_line,
-        distance => &data.distance,
-        time => &data.time,
-        pace => &data.pace,
         variant => data.variant,
         theme => theme_value(&data.theme),
+        font => font_value(),
+        title => xml_chars(&data.title),
+        title_size => px(data.title_size),
+        subline => xml_chars(&data.subline),
+        legend => &data.legend,
+        time => &data.time,
+        distance => &data.distance,
+        pace => &data.pace,
+        fastest => &data.fastest,
+        runner => xml_chars(&data.runner),
         splits => splits,
         avg_t => px(data.avg_t),
         avg_pace => &data.avg_pace,
-        rings => data.rings.as_ref().map(Rings::to_value),
-        route_hero => data.route_hero.as_ref().map(RouteHero::to_value),
-        bars => data.bars.as_ref().map(Bars::to_value),
-        mosaic => data.mosaic.as_ref().map(Mosaic::to_value),
+        ribbon => data.ribbon.as_ref().map(Ribbon::to_value),
+        spiral => data.spiral.as_ref().map(Spiral::to_value),
+        trail => data.trail.as_ref().map(Trail::to_value),
+        dots => data.dots.as_ref().map(Dots::to_value),
+        wave => data.wave.as_ref().map(Wave::to_value),
+        ledger => data.ledger.as_ref().map(Ledger::to_value),
     }
 }
 
-fn theme_value(theme: &Theme) -> Value {
+fn theme_value(theme: &Tokens) -> Value {
     context! {
         paper => theme.paper,
         ink => theme.ink,
         muted => theme.muted,
+        rule => theme.rule,
         accent => theme.accent,
+        dark => theme.dark,
+    }
+}
+
+/// `font.display`, `font.numeral`, `font.label`, `font.text` and `font.mono`:
+/// the family and variation attributes of each role, marked safe so the
+/// quotes survive auto-escaping.
+fn font_value() -> Value {
+    let attributes = |role: Role| Value::from_safe_string(role.attributes());
+    context! {
+        display => attributes(Role::Display),
+        numeral => attributes(Role::Numeral),
+        label => attributes(Role::Label),
+        text => attributes(Role::Text),
+        mono => attributes(Role::Mono),
     }
 }
 
@@ -155,9 +166,48 @@ fn xml_chars(text: &str) -> String {
 }
 
 /// A card coordinate rounded to two decimals, so the SVG reads `13.3`, not
-/// the `13.300000190734863` of a widened `f32`.
+/// the `13.300000190734863` of a widened `f32`, and `40`, not `40.0`.
 pub(crate) fn px(v: f32) -> Value {
-    Value::from((f64::from(v) * 100.0).round() / 100.0)
+    let rounded = (f64::from(v) * 100.0).round() / 100.0;
+    if rounded.fract() == 0.0 {
+        Value::from(rounded as i64)
+    } else {
+        Value::from(rounded)
+    }
+}
+
+/// Writes template values like minijinja's default formatter, except that a
+/// string that is not marked safe is escaped for XML (`&`, `<`, `>`, `"`,
+/// `'`), not for HTML, which would also write `/` as `&#x2f;`.
+fn xml_formatter(
+    out: &mut Output,
+    state: &mut State,
+    value: &Value,
+) -> std::result::Result<(), minijinja::Error> {
+    match value.as_str() {
+        Some(text) if !value.is_safe() && !matches!(state.auto_escape(), AutoEscape::None) => {
+            let escaped = xml_escape(text);
+            std::fmt::Write::write_str(out, &escaped)
+                .map_err(|_| minijinja::Error::new(ErrorKind::WriteFailure, "formatting failed"))
+        }
+        _ => minijinja::escape_formatter(out, state, value),
+    }
+}
+
+/// `text` with the five XML special characters written as entities.
+fn xml_escape(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            c => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 /// Encodes the premultiplied RGBA pixmap as an 8-bit RGB PNG.
@@ -184,77 +234,49 @@ fn encode(pixmap: &tiny_skia::Pixmap) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::card;
-    use crate::model::{Analysis, Meta, Split, SplitView, Stripe, Theme, TrackPoint};
-    use crate::palette::{anchors, pace_position, Palette};
-    use crate::text::TextMeasure;
-    use crate::variant::Variant;
-
-    const STRIPE_WIDTH: f32 = (656.0 - 42.0 * 2.0) / 43.0;
-
-    /// Marathon-like paces in s/km: a steady 5:40, a fast 30th km, a slower finish.
-    fn paces() -> Vec<f64> {
-        (1..=43)
-            .map(|km| match km {
-                30 => 316.0,
-                1 => 352.0,
-                36..=42 => 350.0 + f64::from(km - 36) * 4.0,
-                43 => 330.0,
-                _ => 335.0 + f64::from(km % 5) * 3.0,
-            })
-            .collect()
-    }
-
-    fn stripe_x(index: usize) -> f32 {
-        32.0 + index as f32 * (STRIPE_WIDTH + 2.0)
-    }
+    use crate::model::{Analysis, Meta, Split, SplitView, TrackPoint};
+    use crate::palette::Palette;
+    use crate::text::{Role, TextMeasure};
+    use crate::theme::{Theme, Tokens};
 
     fn fixture(runner: &str) -> CardData {
-        let palette = Palette::light();
-        let paces = paces();
-        let (slow, fast) = anchors(&paces);
-        let stripes = paces
-            .iter()
-            .map(|&pace| Stripe {
-                width: STRIPE_WIDTH,
-                color: palette.hex(pace_position(pace, slow, fast)),
-            })
-            .collect();
-        let route = vec![
-            (588.0, 616.0),
-            (688.0, 616.0),
-            (688.0, 716.0),
-            (588.0, 716.0),
-            (588.0, 616.0),
-        ];
         CardData {
-            header: "RUN · BERLIN".into(),
-            date: "SEPTEMBER 27, 2026".into(),
-            title: "Berlin Marathon".into(),
-            title_size: 48.0,
+            variant: "ribbon",
+            theme: Theme::Light.tokens(),
+            title: "Harbour Half".into(),
+            title_size: 40.0,
+            subline: "Lisbon \u{b7} 19 April 2026".into(),
+            legend: Palette::for_theme(Theme::Light).legend(32),
+            time: "1:48:58".into(),
+            distance: "21.10 km".into(),
+            pace: "5:10 /km".into(),
+            fastest: "km 21 \u{b7} 4:48".into(),
             runner: runner.into(),
-            runner_size: 76.0,
-            stripes,
-            fastest_x: Some(stripe_x(29) + STRIPE_WIDTH / 2.0),
-            ticks: (1..=8)
-                .map(|i| (stripe_x(i * 5 - 1) + STRIPE_WIDTH / 2.0, i as u32 * 5))
-                .collect(),
-            route_start: route[0],
-            route,
-            legend: palette.legend(5),
-            fastest_line: "FASTEST KM 30 · 5:16 /KM".into(),
-            distance: "42.195 km".into(),
-            time: "3:58:41".into(),
-            pace: "5:39 /km".into(),
-            variant: "classic",
-            theme: Theme::light(),
             splits: Vec::new(),
             avg_t: 0.5,
-            avg_pace: "5:39".into(),
-            rings: None,
-            route_hero: None,
-            bars: None,
-            mosaic: None,
+            avg_pace: "5:10".into(),
+            ribbon: None,
+            spiral: None,
+            trail: None,
+            dots: None,
+            wave: None,
+            ledger: None,
         }
+    }
+
+    /// The fixture as `variant` in `theme` would get it.
+    fn fixture_as(variant: Variant, theme: Theme) -> CardData {
+        let palette = Palette::for_theme(theme);
+        CardData {
+            variant: variant.name(),
+            theme: theme.tokens(),
+            legend: palette.legend(32),
+            ..fixture("Mara Lindqvist")
+        }
+    }
+
+    fn svg_of(data: &CardData) -> String {
+        Renderer::new().unwrap().svg(data).unwrap()
     }
 
     /// Width, height and RGB bytes of a PNG.
@@ -278,13 +300,12 @@ mod tests {
         [channel(1), channel(3), channel(5)]
     }
 
-    #[test]
-    fn the_svg_shows_the_runner_in_capitals() {
-        let svg = Renderer::new()
-            .unwrap()
-            .svg(&fixture("Mira Okafor"))
-            .unwrap();
-        assert!(svg.contains("MIRA OKAFOR"), "{svg}");
+    fn assert_colour(actual: [u8; 3], hex: &str, what: &str) {
+        let expected = rgb_of(hex);
+        assert!(
+            actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 2),
+            "{what} is {actual:?}, expected {hex} {expected:?}"
+        );
     }
 
     /// The start tag of the `<text>` element whose content is `content`.
@@ -296,37 +317,213 @@ mod tests {
         &svg[start..=end]
     }
 
+    fn assert_attributes(tag: &str, attributes: &[&str]) {
+        for attribute in attributes {
+            assert!(tag.contains(attribute), "no {attribute} in {tag}");
+        }
+    }
+
     #[test]
-    fn the_svg_sets_the_name_and_the_title_at_their_fitted_sizes() {
+    fn the_title_block_sets_the_title_in_display_and_the_subline_in_muted_label() {
+        let svg = svg_of(&fixture("Mara Lindqvist"));
+        let ink = r##"fill="#17191d""##;
+        let muted = r##"fill="#8a8d93""##;
+        assert_attributes(
+            text_tag(&svg, "Harbour Half"),
+            &[
+                r#"x="48""#,
+                r#"y="92""#,
+                r#"font-size="40""#,
+                ink,
+                &Role::Display.attributes(),
+            ],
+        );
+        assert_attributes(
+            text_tag(&svg, "Lisbon \u{b7} 19 April 2026"),
+            &[
+                r#"x="48""#,
+                r#"y="118""#,
+                r#"font-size="12""#,
+                muted,
+                &Role::Label.attributes(),
+            ],
+        );
+    }
+
+    #[test]
+    fn the_title_is_set_at_its_fitted_size() {
         let data = CardData {
-            runner_size: 52.3,
             title_size: 31.5,
-            ..fixture("Mira Okafor")
+            ..fixture("Mara Lindqvist")
         };
-        let svg = Renderer::new().unwrap().svg(&data).unwrap();
-        let runner = text_tag(&svg, "MIRA OKAFOR");
-        assert!(runner.contains(r#"font-size="52.3""#), "{runner}");
-        let title = text_tag(&svg, "Berlin Marathon");
-        assert!(title.contains(r#"font-size="31.5""#), "{title}");
+        assert_attributes(
+            text_tag(&svg_of(&data), "Harbour Half"),
+            &[r#"font-size="31.5""#],
+        );
     }
 
     #[test]
-    fn the_svg_has_a_background_a_rect_per_stripe_and_five_legend_swatches() {
-        let svg = Renderer::new()
-            .unwrap()
-            .svg(&fixture("Mira Okafor"))
-            .unwrap();
-        assert_eq!(svg.matches("<rect").count(), 1 + 43 + 5, "{svg}");
+    fn the_footer_sets_the_time_the_stat_pairs_and_the_name_as_typed() {
+        let svg = svg_of(&fixture("Mara Lindqvist"));
+        let ink = r##"fill="#17191d""##;
+        let muted = r##"fill="#8a8d93""##;
+        assert_attributes(
+            text_tag(&svg, "1:48:58"),
+            &[
+                r#"x="48""#,
+                r#"y="884""#,
+                r#"font-size="72""#,
+                ink,
+                &Role::Numeral.attributes(),
+            ],
+        );
+        let pairs = [
+            ("distance", "21.10 km", "836"),
+            ("pace", "5:10 /km", "868"),
+            ("fastest", "km 21 \u{b7} 4:48", "900"),
+        ];
+        for (label, value, y) in pairs {
+            let y = format!(r#"y="{y}""#);
+            assert_attributes(
+                text_tag(&svg, label),
+                &[
+                    r#"x="420""#,
+                    &y,
+                    r#"font-size="11""#,
+                    muted,
+                    &Role::Label.attributes(),
+                ],
+            );
+            assert_attributes(
+                text_tag(&svg, value),
+                &[
+                    r#"x="672""#,
+                    &y,
+                    r#"text-anchor="end""#,
+                    r#"font-size="20""#,
+                    ink,
+                    &Role::Text.attributes(),
+                ],
+            );
+        }
+        assert_attributes(
+            text_tag(&svg, "Mara Lindqvist"),
+            &[
+                r#"x="48""#,
+                r#"y="936""#,
+                r#"font-size="14""#,
+                ink,
+                &Role::Label.attributes(),
+            ],
+        );
+        assert!(!svg.contains("MARA"), "{svg}");
     }
 
     #[test]
-    fn the_svg_escapes_markup_in_the_names() {
-        let svg = Renderer::new()
-            .unwrap()
-            .svg(&fixture("Tom & Jerry"))
-            .unwrap();
-        assert!(svg.contains("TOM &amp; JERRY"), "{svg}");
-        assert!(!svg.contains("TOM & JERRY"), "{svg}");
+    fn without_a_fastest_kilometre_the_fastest_pair_is_left_out() {
+        let data = CardData {
+            fastest: String::new(),
+            ..fixture("Mara Lindqvist")
+        };
+        let svg = svg_of(&data);
+        assert!(!svg.contains(">fastest</text>"), "{svg}");
+        assert!(!svg.contains("></text>"), "an empty text element in {svg}");
+        assert!(svg.contains(">pace</text>"), "{svg}");
+    }
+
+    #[test]
+    fn the_legend_is_a_bar_of_32_five_pixel_rects_between_slower_and_faster() {
+        let data = fixture("Mara Lindqvist");
+        let svg = svg_of(&data);
+        for (i, colour) in data.legend.iter().enumerate() {
+            let rect = format!(
+                r#"<rect x="{}" y="760" width="5" height="3" fill="{colour}"/>"#,
+                48 + 5 * i
+            );
+            assert!(svg.contains(&rect), "no {rect} in {svg}");
+        }
+        let muted = r##"fill="#8a8d93""##;
+        assert_attributes(
+            text_tag(&svg, "slower"),
+            &[
+                r#"x="48""#,
+                r#"y="780""#,
+                r#"font-size="11""#,
+                muted,
+                &Role::Label.attributes(),
+            ],
+        );
+        assert_attributes(
+            text_tag(&svg, "faster"),
+            &[
+                r#"x="208""#,
+                r#"y="780""#,
+                r#"text-anchor="end""#,
+                r#"font-size="11""#,
+                muted,
+            ],
+        );
+    }
+
+    #[test]
+    fn a_one_pixel_rule_spans_the_content_width_at_800() {
+        let svg = svg_of(&fixture("Mara Lindqvist"));
+        assert!(
+            svg.contains(r##"<rect x="48" y="800" width="624" height="1" fill="#d9dad6"/>"##),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn the_frame_draws_no_other_text() {
+        let svg = svg_of(&fixture("Mara Lindqvist"));
+        let texts: Vec<&str> = svg
+            .split("</text>")
+            .filter_map(|chunk| chunk.rsplit_once('>').map(|(_, text)| text))
+            .filter(|text| !text.trim().is_empty())
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "Harbour Half",
+                "Lisbon \u{b7} 19 April 2026",
+                "slower",
+                "faster",
+                "1:48:58",
+                "distance",
+                "21.10 km",
+                "pace",
+                "5:10 /km",
+                "fastest",
+                "km 21 \u{b7} 4:48",
+                "Mara Lindqvist",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_svg_escapes_markup_in_the_names_as_xml() {
+        let svg = svg_of(&fixture("Tom & Jerry"));
+        assert!(svg.contains(">Tom &amp; Jerry</text>"), "{svg}");
+        assert!(!svg.contains("Tom & Jerry"), "{svg}");
+        let svg = svg_of(&fixture(r#"<b>"Jo" O'Neil</b>"#));
+        assert!(
+            svg.contains(">&lt;b&gt;&quot;Jo&quot; O&apos;Neil&lt;/b&gt;</text>"),
+            "{svg}"
+        );
+        assert!(
+            svg.contains(">5:10 /km</text>"),
+            "a slash is escaped in {svg}"
+        );
+    }
+
+    #[test]
+    fn px_rounds_to_two_decimals_and_writes_whole_numbers_without_a_point() {
+        assert_eq!(px(13.3).to_string(), "13.3");
+        assert_eq!(px(31.456).to_string(), "31.46");
+        assert_eq!(px(40.0).to_string(), "40");
+        assert_eq!(px(-2.0).to_string(), "-2");
+        assert_eq!(px(0.004).to_string(), "0");
     }
 
     #[test]
@@ -342,22 +539,22 @@ mod tests {
     #[test]
     fn a_control_character_in_the_names_does_not_break_the_png() {
         let data = CardData {
-            header: "RUN \u{b7} BER\u{1b}LIN".into(),
-            title: "Berlin\u{b} Marathon\u{fffe}".into(),
-            ..fixture("Mira\u{1} Okafor")
+            subline: "Lis\u{1b}bon \u{b7} 19 April 2026".into(),
+            title: "Harbour\u{b} Half\u{fffe}".into(),
+            ..fixture("Mara\u{1} Lindqvist")
         };
         let renderer = Renderer::new().unwrap();
         let svg = renderer.svg(&data).unwrap();
-        assert!(svg.contains(">MIRA OKAFOR</text>"), "{svg}");
-        assert!(svg.contains(">Berlin Marathon</text>"), "{svg}");
-        assert!(svg.contains(">RUN \u{b7} BERLIN</text>"), "{svg}");
+        assert!(svg.contains(">Mara Lindqvist</text>"), "{svg}");
+        assert!(svg.contains(">Harbour Half</text>"), "{svg}");
+        assert!(svg.contains(">Lisbon \u{b7} 19 April 2026</text>"), "{svg}");
         renderer.png(&svg, 1.0).expect("the svg rasterises");
     }
 
     #[test]
     fn the_png_has_the_card_size_times_the_scale() {
         let renderer = Renderer::new().unwrap();
-        let data = fixture("Mira Okafor");
+        let data = fixture("Mara Lindqvist");
         let (w, h, _) = decode(&renderer.render(&data, 1.0).unwrap());
         assert_eq!((w, h), (720, 1000));
         let (w, h, _) = decode(&renderer.render(&data, 2.0).unwrap());
@@ -365,17 +562,27 @@ mod tests {
     }
 
     #[test]
-    fn the_png_shows_the_background_and_the_stripe_colours() {
-        let data = fixture("Mira Okafor");
-        let image = decode(&Renderer::new().unwrap().render(&data, 1.0).unwrap());
-        assert_eq!(pixel(&image, 5, 5), rgb_of("#f4efe6"));
-        let centre_x = (stripe_x(0) + STRIPE_WIDTH / 2.0) as u32;
-        let actual = pixel(&image, centre_x, 370);
-        let expected = rgb_of(&data.stripes[0].color);
-        for (a, e) in actual.iter().zip(expected) {
-            assert!(
-                a.abs_diff(e) <= 2,
-                "pixel {actual:?}, stripe colour {expected:?}"
+    fn the_png_shows_the_paper_the_legend_ends_and_the_rule_in_both_themes() {
+        let renderer = Renderer::new().unwrap();
+        for theme in Theme::ALL {
+            let data = fixture_as(Variant::Ribbon, theme);
+            let image = decode(&renderer.render(&data, 1.0).unwrap());
+            let tokens = theme.tokens();
+            assert_colour(pixel(&image, 5, 5), tokens.paper, &format!("{theme} paper"));
+            assert_colour(
+                pixel(&image, 50, 761),
+                &data.legend[0],
+                &format!("{theme} slower end"),
+            );
+            assert_colour(
+                pixel(&image, 205, 761),
+                &data.legend[31],
+                &format!("{theme} faster end"),
+            );
+            assert_colour(
+                pixel(&image, 360, 800),
+                tokens.rule,
+                &format!("{theme} rule"),
             );
         }
     }
@@ -384,7 +591,7 @@ mod tests {
     fn the_png_is_compressed() {
         let png = Renderer::new()
             .unwrap()
-            .render(&fixture("Mira Okafor"), 1.0)
+            .render(&fixture("Mara Lindqvist"), 1.0)
             .unwrap();
         let raw_rgb = 720 * 1000 * 3;
         assert!(png.len() < raw_rgb / 4, "{} bytes", png.len());
@@ -396,130 +603,202 @@ mod tests {
         assert!(matches!(error, crate::Error::Svg(_)), "{error:?}");
     }
 
-    /// The fixture as `variant` would get it: its name and its theme.
-    fn fixture_as(variant: Variant) -> CardData {
-        CardData {
-            variant: variant.name(),
-            theme: variant.theme(),
-            ..fixture("Mira Okafor")
+    #[test]
+    fn every_variant_renders_its_template_inside_the_frame_in_both_themes() {
+        let renderer = Renderer::new().unwrap();
+        for theme in Theme::ALL {
+            for variant in Variant::ALL {
+                let data = fixture_as(variant, theme);
+                let svg = renderer.svg(&data).unwrap();
+                let what = format!("{variant} {theme}");
+                assert!(svg.starts_with("<svg"), "{what}: {svg}");
+                assert!(svg.trim_end().ends_with("</svg>"), "{what}: {svg}");
+                assert!(!svg.contains("{{") && !svg.contains("{%"), "{what}: {svg}");
+                assert!(svg.contains(">Mara Lindqvist</text>"), "{what}: {svg}");
+                assert!(svg.contains(">1:48:58</text>"), "{what}: {svg}");
+                let paper = format!(r#"fill="{}""#, data.theme.paper);
+                assert!(svg.contains(&paper), "{what} has no {paper}: {svg}");
+                let image = decode(&renderer.png(&svg, 1.0).unwrap());
+                assert_eq!((image.0, image.1), (720, 1000), "{what}");
+                assert_eq!(pixel(&image, 2, 2), rgb_of(data.theme.paper), "{what}");
+            }
         }
     }
 
     #[test]
-    fn every_variant_renders_its_own_template_on_its_theme() {
+    fn the_dark_theme_draws_a_blurred_copy_of_the_visualisation_under_it() {
         let renderer = Renderer::new().unwrap();
         for variant in Variant::ALL {
-            let data = fixture_as(variant);
-            let svg = renderer.svg(&data).unwrap();
-            assert!(svg.starts_with("<svg"), "{variant}: {svg}");
+            let dark = renderer.svg(&fixture_as(variant, Theme::Dark)).unwrap();
             assert!(
-                !svg.contains("{{") && !svg.contains("{%"),
-                "{variant}: {svg}"
+                dark.contains(r#"<filter id="glow" x="-15%" y="-30%" width="130%" height="160%">"#),
+                "{variant}: {dark}"
             );
-            assert!(svg.contains(">MIRA OKAFOR</text>"), "{variant}: {svg}");
-            let paper = format!(r#"fill="{}""#, data.theme.paper);
-            assert!(svg.contains(&paper), "{variant} has no {paper}: {svg}");
-            let image = decode(&renderer.png(&svg, 1.0).unwrap());
-            assert_eq!((image.0, image.1), (720, 1000), "{variant}");
-            assert_eq!(pixel(&image, 2, 2), rgb_of(data.theme.paper), "{variant}");
+            assert!(
+                dark.contains(r#"<feGaussianBlur stdDeviation="14"/>"#),
+                "{variant}: {dark}"
+            );
+            assert_eq!(
+                dark.matches(r#"<g filter="url(#glow)" opacity="0.35">"#)
+                    .count(),
+                1,
+                "{variant}: {dark}"
+            );
+            let light = renderer.svg(&fixture_as(variant, Theme::Light)).unwrap();
+            assert!(!light.contains("feGaussianBlur"), "{variant}: {light}");
+            assert!(!light.contains("filter"), "{variant}: {light}");
+            for svg in [dark, light] {
+                let image = decode(&renderer.png(&svg, 1.0).unwrap());
+                assert_eq!((image.0, image.1), (720, 1000), "{variant}");
+            }
         }
     }
 
     #[test]
-    fn noir_blurs_a_copy_of_the_stripes_on_dark_paper() {
-        let renderer = Renderer::new().unwrap();
-        let noir = renderer.svg(&fixture_as(Variant::Noir)).unwrap();
-        assert!(
-            noir.contains(r#"<feGaussianBlur stdDeviation="14"/>"#),
-            "{noir}"
-        );
-        assert!(
-            noir.contains(r#"<g filter="url(#glow)" opacity="0.35">"#),
-            "{noir}"
-        );
-        assert!(noir.contains(r##"fill="#0f1115""##), "{noir}");
+    fn the_glow_repeats_the_visualisation_block_exactly_and_the_light_theme_draws_it_once() {
+        let mut env = Environment::new();
+        env.set_auto_escape_callback(|_| AutoEscape::Html);
+        env.add_template("frame.svg", FRAME).unwrap();
+        env.add_template(
+            "probe.svg",
+            r#"{% extends "frame.svg" %}{% block viz %}<rect id="probe" fill="{{ theme.ink }}"/>{% endblock %}"#,
+        )
+        .unwrap();
+        let probe = r##"<rect id="probe" fill="#f4efe6"/>"##;
+        let dark = env
+            .get_template("probe.svg")
+            .unwrap()
+            .render(template_context(&fixture_as(Variant::Ribbon, Theme::Dark)))
+            .unwrap();
+        assert_eq!(dark.matches(probe).count(), 2, "{dark}");
+        let glow = dark
+            .split(r#"<g filter="url(#glow)" opacity="0.35">"#)
+            .nth(1)
+            .and_then(|rest| rest.split("</g>").next())
+            .unwrap_or_else(|| panic!("no glow group in {dark}"));
+        assert!(glow.contains(probe), "{glow}");
+        let light = env
+            .get_template("probe.svg")
+            .unwrap()
+            .render(template_context(&fixture_as(Variant::Ribbon, Theme::Light)))
+            .unwrap();
         assert_eq!(
-            noir.matches(r#"height="380" rx="2""#).count(),
-            2 * 43,
-            "{noir}"
+            light
+                .matches(r##"<rect id="probe" fill="#17191d"/>"##)
+                .count(),
+            1,
+            "{light}"
         );
-        let classic = renderer.svg(&fixture_as(Variant::Classic)).unwrap();
-        assert!(!classic.contains("feGaussianBlur"), "{classic}");
-        assert!(!classic.contains("#0f1115"), "{classic}");
+    }
+
+    /// Every `#rrggbb` literal in `svg`.
+    fn colour_literals(svg: &str) -> Vec<&str> {
+        svg.match_indices('#')
+            .map(|(i, _)| &svg[i..(i + 7).min(svg.len())])
+            .filter(|c| c.len() == 7 && c[1..].chars().all(|h| h.is_ascii_hexdigit()))
+            .collect()
     }
 
     #[test]
-    fn the_noir_png_shows_the_stripes_over_their_glow() {
-        let data = fixture_as(Variant::Noir);
-        let image = decode(&Renderer::new().unwrap().render(&data, 1.0).unwrap());
-        let centre_x = (stripe_x(0) + STRIPE_WIDTH / 2.0) as u32;
-        let actual = pixel(&image, centre_x, 370);
-        let expected = rgb_of(&data.stripes[0].color);
-        for (a, e) in actual.iter().zip(expected) {
-            assert!(
-                a.abs_diff(e) <= 2,
-                "pixel {actual:?}, stripe colour {expected:?}"
-            );
-        }
-        let paper = rgb_of("#0f1115");
-        let above = pixel(&image, 360, 172);
-        assert_ne!(above, paper, "no glow just above the stripes");
-        assert_eq!(pixel(&image, 360, 30), paper, "the glow reaches the header");
-    }
-
-    #[test]
-    fn the_classic_colours_come_from_the_theme() {
-        // Without stripes and legend, whose palette colours include the accent.
-        let data = CardData {
-            theme: Theme {
+    fn the_frame_takes_every_colour_from_the_theme_and_the_legend() {
+        let renderer = Renderer::new().unwrap();
+        for (variant, dark) in Variant::ALL
+            .into_iter()
+            .zip([false, true].into_iter().cycle())
+        {
+            let tokens = Tokens {
                 paper: "#010203",
                 ink: "#040506",
                 muted: "#070809",
-                accent: "#0a0b0c",
-            },
-            stripes: Vec::new(),
-            legend: Vec::new(),
-            ..fixture("Mira Okafor")
-        };
-        let svg = Renderer::new().unwrap().svg(&data).unwrap();
-        for colour in ["#010203", "#040506", "#0a0b0c"] {
-            assert!(svg.contains(colour), "no {colour} in {svg}");
-        }
-        for literal in ["#f4efe6", "#1b1b1b", "#e8601c"] {
-            assert!(!svg.contains(literal), "{literal} in {svg}");
+                rule: "#0a0b0c",
+                accent: "#101112",
+                dark,
+            };
+            let data = CardData {
+                theme: tokens,
+                legend: vec!["#0d0e0f".into(); 32],
+                ..fixture_as(variant, Theme::Light)
+            };
+            let svg = renderer.svg(&data).unwrap();
+            let mut colours = colour_literals(&svg);
+            colours.sort_unstable();
+            colours.dedup();
+            assert_eq!(
+                colours,
+                ["#010203", "#040506", "#070809", "#0a0b0c", "#0d0e0f"],
+                "{variant}"
+            );
         }
     }
 
     #[test]
-    fn the_context_has_the_variant_theme_split_views_and_rounded_numbers() {
+    fn the_context_has_the_frame_the_theme_the_roles_and_rounded_numbers() {
         let data = CardData {
             splits: vec![SplitView {
-                index: 43,
-                pace: "5:20".into(),
-                color: "#e8601c".into(),
+                index: 22,
+                pace: "4:50".into(),
+                color: "#efd35a".into(),
                 partial: true,
-                fraction: 0.195_000_01,
+                fraction: 0.100_000_01,
                 t: 0.666_666,
             }],
             avg_t: 0.333_333,
-            ..fixture_as(Variant::Noir)
+            title_size: 31.456,
+            ..fixture_as(Variant::Wave, Theme::Dark)
         };
         let context = template_context(&data);
         let attr = |value: &Value, name: &str| value.get_attr(name).unwrap();
-        assert_eq!(attr(&context, "variant").as_str(), Some("noir"));
+        assert_eq!(attr(&context, "variant").as_str(), Some("wave"));
         let theme = attr(&context, "theme");
-        assert_eq!(attr(&theme, "paper").as_str(), Some("#0f1115"));
-        assert_eq!(attr(&theme, "muted").as_str(), Some("#7d8590"));
+        for (key, colour) in [
+            ("paper", "#0f1115"),
+            ("ink", "#f4efe6"),
+            ("muted", "#7d8590"),
+            ("rule", "#262b33"),
+            ("accent", "#ff5a36"),
+        ] {
+            assert_eq!(attr(&theme, key).as_str(), Some(colour), "theme.{key}");
+        }
+        assert!(attr(&theme, "dark").is_true());
+        let font = attr(&context, "font");
+        for (key, role) in [
+            ("display", Role::Display),
+            ("numeral", Role::Numeral),
+            ("label", Role::Label),
+            ("text", Role::Text),
+            ("mono", Role::Mono),
+        ] {
+            let value = attr(&font, key);
+            assert!(value.is_safe(), "font.{key} would be escaped");
+            assert_eq!(
+                value.as_str(),
+                Some(role.attributes().as_str()),
+                "font.{key}"
+            );
+        }
+        for (key, expected) in [
+            ("title", "Harbour Half"),
+            ("subline", "Lisbon \u{b7} 19 April 2026"),
+            ("time", "1:48:58"),
+            ("distance", "21.10 km"),
+            ("pace", "5:10 /km"),
+            ("fastest", "km 21 \u{b7} 4:48"),
+            ("runner", "Mara Lindqvist"),
+            ("avg_pace", "5:10"),
+        ] {
+            assert_eq!(attr(&context, key).as_str(), Some(expected), "{key}");
+        }
+        assert_eq!(attr(&context, "title_size").to_string(), "31.46");
         assert_eq!(attr(&context, "avg_t").to_string(), "0.33");
-        assert_eq!(attr(&context, "avg_pace").as_str(), Some("5:39"));
+        assert_eq!(attr(&context, "legend").len(), Some(32));
         let split = attr(&context, "splits").get_item(&Value::from(0)).unwrap();
-        assert_eq!(attr(&split, "index").to_string(), "43");
-        assert_eq!(attr(&split, "pace").as_str(), Some("5:20"));
-        assert_eq!(attr(&split, "color").as_str(), Some("#e8601c"));
+        assert_eq!(attr(&split, "index").to_string(), "22");
+        assert_eq!(attr(&split, "pace").as_str(), Some("4:50"));
+        assert_eq!(attr(&split, "color").as_str(), Some("#efd35a"));
         assert!(attr(&split, "partial").is_true());
-        assert_eq!(attr(&split, "fraction").to_string(), "0.2");
+        assert_eq!(attr(&split, "fraction").to_string(), "0.1");
         assert_eq!(attr(&split, "t").to_string(), "0.67");
-        for block in ["rings", "route_hero", "bars", "mosaic"] {
+        for block in ["ribbon", "spiral", "trail", "dots", "wave", "ledger"] {
             assert!(attr(&context, block).is_none(), "{block}");
         }
     }
@@ -543,32 +822,27 @@ mod tests {
             splits: vec![split(1, 300.0), split(2, 330.0)],
             fastest: Some(1),
             start: None,
-            points: vec![point(52.5, 13.4), point(52.51, 13.41), point(52.5, 13.42)],
+            points: vec![point(38.7, -9.15), point(38.71, -9.14), point(38.7, -9.13)],
         };
         let meta = Meta {
-            runner: "Mira Okafor".into(),
-            event: "Spreelauf".into(),
+            runner: "Mara Lindqvist".into(),
+            event: "Harbour Half".into(),
             city: None,
-            date: time::macros::date!(2026 - 09 - 27),
+            date: time::macros::date!(2026 - 04 - 19),
         };
-        let blocks = [
-            (Variant::Rings, "rings"),
-            (Variant::Route, "route_hero"),
-            (Variant::Bars, "bars"),
-            (Variant::Mosaic, "mosaic"),
-        ];
-        for (variant, key) in blocks {
+        for variant in Variant::ALL {
             let data = card::build(
                 &analysis,
                 &meta,
-                &Palette::light(),
+                &Palette::for_theme(Theme::Light),
                 &TextMeasure::new(),
                 variant,
+                Theme::Light,
             );
             let context = template_context(&data);
-            for (_, other) in blocks {
-                let block = context.get_attr(other).unwrap();
-                assert_eq!(block.is_none(), other != key, "{other} for {variant}");
+            for other in Variant::ALL {
+                let block = context.get_attr(other.name()).unwrap();
+                assert_eq!(block.is_none(), other != variant, "{other} for {variant}");
             }
         }
     }

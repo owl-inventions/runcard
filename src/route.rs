@@ -1,11 +1,11 @@
-//! Projects the track coordinates into the route outline box of the card.
+//! Projects the track coordinates into a box of the card.
 
 use crate::model::TrackPoint;
 
 /// Bisection steps when searching the simplification tolerance.
 const BISECTION_STEPS: usize = 40;
 
-/// The box on the card the route outline is fitted into, in card pixels.
+/// A box on the card a route is fitted into, in card pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BBox {
     pub x: f32,

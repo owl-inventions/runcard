@@ -1,28 +1,32 @@
 # runcard
 
-runcard turns a GPX track into a poster-style PNG card. Every kilometre
-becomes one coloured stripe, from deep blue for the slowest to orange for the
-fastest. The card also shows the event, the runner's name, the route outline
-and the distance, time and average pace. The GPX file needs timestamps, since
-the paces are worked out from them.
+runcard turns a GPX track into a typographic card for one run, as a PNG or
+SVG. Each kilometre is coloured by its pace on a scale from deep violet for
+the slowest to warm yellow (coral on dark paper) for the fastest, and drawn as
+one of six pictures: bars, a spiral, the route, dots, a curve or a table.
+Around it the card sets the event, the city and date, the finish time, the
+distance, the average pace, the fastest kilometre and the runner's name, on
+light or dark paper. The GPX file needs timestamps, since the paces are worked
+out from them.
 
 <img src="examples/sample.png" alt="Sample card rendered from examples/sample.gpx" width="360">
 
 ## Usage
 
 ```
-runcard <INPUT.gpx> --runner <NAME> [--event <NAME>] [--city <CITY>] [--date <YYYY-MM-DD>] [-o <OUT.png>] [--scale <F>] [--variant <NAME>] [--svg <OUT.svg>] [--timing]
+runcard <INPUT.gpx> --runner <NAME> [--event <NAME>] [--city <CITY>] [--date <YYYY-MM-DD>] [-o <OUT.png>] [--scale <F>] [--variant <NAME>] [--theme <light|dark>] [--svg <OUT.svg>] [--timing]
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `--runner <NAME>` | Runner's name, printed in capitals. Required. |
+| `--runner <NAME>` | Runner's name, shown as typed. Required. |
 | `--event <NAME>` | Event title. Default: the GPX track name, else `Run`. |
-| `--city <CITY>` | City in the header line (`RUN · BERLIN`). |
+| `--city <CITY>` | City in the line under the title (`Lisbon · 19 April 2026`). |
 | `--date <YYYY-MM-DD>` | Date of the run. Default: the UTC date of the first timestamp, else today. |
 | `-o, --output <OUT.png>` | PNG to write. Default: the input path with a `.png` extension. |
 | `--scale <F>` | Raster scale over the 720x1000 card, must be above 0. Default: `2` (1440x2000). |
-| `--variant <NAME>` | Card look: `classic`, `noir`, `rings`, `route`, `bars` or `mosaic` (`--help` describes each). Default: `classic`. |
+| `--variant <NAME>` | Picture of the splits: `ribbon`, `spiral`, `trail`, `dots`, `wave` or `ledger` (`--help` describes each). Default: `ribbon`. |
+| `--theme <light\|dark>` | Light or dark paper, independent of the variant. Default: `light`. |
 | `--svg <OUT.svg>` | Also write the card as SVG. |
 | `--timing` | Print the time spent in each stage to stderr. |
 
@@ -31,23 +35,29 @@ lines go to stderr). Errors go to stderr with exit code 1; invalid or missing
 arguments exit with code 2.
 
 ```
-runcard examples/sample.gpx --runner "Julia Brandt" --city Berlin
+runcard examples/sample.gpx --runner "Mara Lindqvist" --city Lisbon
 ```
 
 ## Variants
 
-Six looks for the same run, chosen with `--variant` or the `variant` part.
-All six are rendered from `examples/sample.gpx`.
+Six pictures of the same splits, chosen with `--variant` or the `variant`
+part, each in the same frame and on either theme. All are rendered from
+`examples/sample.gpx`.
 
-| `classic` | `noir` | `rings` |
+| `ribbon` | `spiral` | `trail` |
 | --- | --- | --- |
-| <img src="examples/classic.png" alt="classic" width="200"> | <img src="examples/noir.png" alt="noir" width="200"> | <img src="examples/rings.png" alt="rings" width="200"> |
-| One stripe per kilometre, coloured by pace. The default. | The classic layout on a dark ground, the stripes glowing. | The kilometres as a ring around the finish time. |
+| <img src="examples/ribbon.png" alt="ribbon" width="200"> | <img src="examples/spiral.png" alt="spiral" width="200"> | <img src="examples/trail.png" alt="trail" width="200"> |
+| One bar per kilometre, longer and brighter the faster it was run. The default. | The kilometres wound outward from the centre as one coloured spiral. | The route itself, each kilometre drawn in the colour of its pace. |
 
-| `route` | `bars` | `mosaic` |
+| `dots` | `wave` | `ledger` |
 | --- | --- | --- |
-| <img src="examples/route.png" alt="route" width="200"> | <img src="examples/bars.png" alt="bars" width="200"> | <img src="examples/mosaic.png" alt="mosaic" width="200"> |
-| The route drawn large, each kilometre in its pace colour. | A speed chart: taller bars for faster kilometres, the average dashed. | One tile per kilometre with its pace, like a calendar. |
+| <img src="examples/dots.png" alt="dots" width="200"> | <img src="examples/wave.png" alt="wave" width="200"> | <img src="examples/ledger.png" alt="ledger" width="200"> |
+| A grid of dots, one per kilometre, larger for the faster ones. | The pace as a smooth curve over the distance, rising when faster. | The splits as a table of figures, a colour swatch beside each pace. |
+
+With `--theme dark` or the `theme` part the card is set on near-black paper,
+the colours brighter and the picture glowing:
+
+<img src="examples/ribbon-dark.png" alt="ribbon on the dark theme" width="200">
 
 ## Server
 
@@ -77,13 +87,14 @@ and a blank optional part counts as not given.
 | Part | Meaning |
 | --- | --- |
 | `gpx` | The GPX file. Required. |
-| `runner` | Runner's name, printed in capitals. Required. |
+| `runner` | Runner's name, shown as typed. Required. |
 | `event` | Event title. Default: the GPX track name, else `Run`. |
-| `city` | City in the header line. |
+| `city` | City in the line under the title. |
 | `date` | Date of the run as `YYYY-MM-DD`. Default: the UTC date of the first timestamp, else today. |
 | `scale` | Raster scale over the 720x1000 card, above 0 and at most 8. Default: `2`. |
 | `format` | `png` or `svg`. Default: `png`. |
-| `variant` | Card look, one of the names `GET /variants` lists. Default: `classic`. |
+| `variant` | Picture of the splits, one of the names `GET /variants` lists. Default: `ribbon`. |
+| `theme` | `light` or `dark`. Default: `light`. |
 
 The answer is the card with status 200, `Content-Type: image/png` (or
 `image/svg+xml; charset=utf-8`) and
@@ -92,20 +103,20 @@ come as JSON, `{"error":"<message>"}`:
 
 | Status | When |
 | --- | --- |
-| 400 | `gpx` or `runner` is missing or empty; `date`, `scale`, `format` or `variant` is invalid; the multipart body is malformed; the GPX cannot be parsed or analysed (the message says why, e.g. `track has no timestamps, pace cannot be derived`). |
+| 400 | `gpx` or `runner` is missing or empty; `date`, `scale`, `format`, `variant` or `theme` is invalid (e.g. `invalid theme: expected light or dark, got "sepia"`); the multipart body is malformed; the GPX cannot be parsed or analysed (the message says why, e.g. `track has no timestamps, pace cannot be derived`). |
 | 413 | The body is larger than `--max-body-mib`. |
 | 415 | The body is not `multipart/form-data`. |
 | 500 | Rendering failed. The message is `rendering failed`; the details go to the log. |
 
 ```
-curl -F gpx=@run.gpx -F runner="Julia Brandt" -F city=Berlin -o card.png http://localhost:8080/cards
+curl -F gpx=@run.gpx -F runner="Mara Lindqvist" -F city=Lisbon -F theme=dark -o card.png http://localhost:8080/cards
 ```
 
 ### `GET /variants`
 
-Answers 200 with the card looks in display order, the default first, each
-with one sentence on how it looks:
-`[{"name":"classic","description":"..."},{"name":"noir","description":"..."},...]`.
+Answers 200 with the variants in display order, the default first, each
+with one sentence on what it draws:
+`[{"name":"ribbon","description":"..."},{"name":"spiral","description":"..."},...]`.
 
 ### `GET /health`
 
@@ -113,11 +124,12 @@ Answers 200 with `{"status":"ok"}`.
 
 ## Limits
 
-A long runner's name or event title is set smaller until it fits (the name
-down to 40 px, the title down to 28 px) and cut with an ellipsis if it does
-not fit even then; a long city is cut so the header does not run into the
-date. Every track point needs a timestamp, and no timestamp may be earlier
-than the one before it. Runs of one metre or less are rejected.
+A long event title is set smaller until it fits the 624 px line, down to
+28 px, and cut with an ellipsis if it does not fit even then. A long runner's
+name is cut with an ellipsis at its size. A long city is cut before the date,
+so the line under the title always ends with the whole date. Every track point
+needs a timestamp, and no timestamp may be earlier than the one before it.
+Runs of one metre or less are rejected.
 
 ## Build
 
@@ -146,23 +158,26 @@ not recompile the dependencies. The server stops cleanly on the SIGTERM that
 
 ## Fonts
 
-The card uses IBM Plex Mono, Fraunces and Bebas Neue, all under the SIL Open
-Font License 1.1. The font files and their licence texts are in `fonts/`, and
+The card is set in Archivo (the frame: title, time, labels and values) and
+JetBrains Mono (figures inside the pictures), both variable fonts under the
+SIL Open Font License 1.1. Each text role sets its own point on the font's
+axes, for example the title at width 112 and weight 600 and the time at width
+85 and weight 500. The font files and their licence texts are in `fonts/`, and
 `fonts/fetch.sh` downloads them again from the google/fonts repository.
 
 ## Timing
 
-Rendering `examples/sample.gpx` (a marathon, 423 points) at the default scale
-with `--timing`, release build, second of two consecutive runs on an Apple M4
-Pro:
+Rendering `examples/sample.gpx` (a half marathon, 212 points) at the default
+scale with `--timing`, release build, second of two consecutive runs on an
+Apple M4 Pro:
 
 ```
-parse 1.2 ms
+parse 0.6 ms
 analyze 0.0 ms
-layout 0.5 ms
+layout 0.1 ms
 svg 0.1 ms
-png 11.7 ms
-total 13.5 ms
+png 9.8 ms
+total 10.6 ms
 ```
 
 `layout` includes measuring the names against the bundled fonts. `svg` is

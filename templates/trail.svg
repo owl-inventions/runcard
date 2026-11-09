@@ -1,0 +1,14 @@
+{% extends "frame.svg" %}
+{% block viz %}
+{%- if trail %}
+{%- for segment in trail.segments %}
+    <path d="{{ segment.path }}" fill="none" stroke="{{ segment.color }}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+{%- endfor %}
+{%- if trail.start %}
+    <circle cx="{{ trail.start.x }}" cy="{{ trail.start.y }}" r="5" fill="{{ theme.paper }}" stroke="{{ theme.ink }}" stroke-width="2"/>
+{%- endif %}
+{%- if trail.finish %}
+    <rect x="{{ trail.finish.x }}" y="{{ trail.finish.y }}" width="7" height="7" fill="{{ theme.ink }}"/>
+{%- endif %}
+{%- endif %}
+{% endblock %}

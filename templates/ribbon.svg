@@ -1,0 +1,14 @@
+{% extends "frame.svg" %}
+{% block viz %}
+{%- if ribbon %}
+{%- for bar in ribbon.bars %}
+    <rect x="{{ bar.x }}" y="{{ bar.y }}" width="{{ bar.width }}" height="{{ bar.height }}" rx="{{ bar.rx }}" fill="{{ bar.color }}"{% if bar.opacity %} opacity="{{ bar.opacity }}"{% endif %}/>
+{%- if bar.label_y %}
+    <text x="{{ ribbon.label_x }}" y="{{ bar.label_y }}" text-anchor="end" {{ font.mono }} font-size="11" fill="{{ theme.muted }}">{{ bar.index }}</text>
+{%- endif %}
+{%- endfor %}
+{%- if ribbon.outline %}
+    <rect x="{{ ribbon.outline.x }}" y="{{ ribbon.outline.y }}" width="{{ ribbon.outline.width }}" height="{{ ribbon.outline.height }}" rx="{{ ribbon.outline.rx }}" fill="none" stroke="{{ theme.ink }}" stroke-width="2"/>
+{%- endif %}
+{%- endif %}
+{% endblock %}

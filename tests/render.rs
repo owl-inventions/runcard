@@ -1,33 +1,29 @@
-//! The whole pipeline end to end: a synthetic marathon through the library to
-//! a PNG, and the bundled sample through the `runcard` binary.
+//! The whole pipeline end to end: a synthetic run through the library to a
+//! PNG, and the bundled sample through the `runcard` binary.
 
 mod common;
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use runcard::palette::Palette;
 use runcard::render::Renderer;
 use runcard::text::TextMeasure;
-use runcard::{card, gpx, splits, Meta, Variant};
+use runcard::{card, gpx, splits, CardData, Meta, Theme, Variant};
 use time::macros::{date, datetime};
 use time::OffsetDateTime;
 
-const START: OffsetDateTime = datetime!(2026-09-27 09:00:00 UTC);
-const MARATHON_M: f64 = 42_195.0;
+const START: OffsetDateTime = datetime!(2026-04-19 07:30:00 UTC);
+const HALF_M: f64 = 21_100.0;
 const SCALE: f32 = 2.0;
-/// Top of the stripe bar and half its height, in card pixels (see the template).
-const STRIPE_TOP: f32 = 180.0;
-const STRIPE_HALF_HEIGHT: f32 = 190.0;
-const BACKGROUND: &str = "#f4efe6";
-const FASTEST_COLOUR: &str = "#e8601c";
 
-/// 5:30 per kilometre, except a 4:30 kilometre 30.
-fn marathon_pace(km: u32) -> f64 {
-    if km == 30 {
-        270.0
-    } else {
-        330.0
+/// 5:10 per kilometre, except a 4:48 kilometre 21 and a 5:52 kilometre 14.
+fn half_pace(km: u32) -> f64 {
+    match km {
+        14 => 352.0,
+        21 => 288.0,
+        _ => 310.0,
     }
 }
 
@@ -57,6 +53,17 @@ impl Image {
         let i = ((y * self.width + x) * 3) as usize;
         [self.rgb[i], self.rgb[i + 1], self.rgb[i + 2]]
     }
+
+    /// The pixel at card coordinates (`x`, `y`).
+    fn at(&self, x: f32, y: f32) -> [u8; 3] {
+        self.pixel((x * SCALE) as u32, (y * SCALE) as u32)
+    }
+
+    /// Whether any pixel in the card-pixel rectangle `x` by `y` is dark (red below 80).
+    fn has_dark_pixels(&self, x: Range<f32>, y: Range<f32>) -> bool {
+        let pixels = |range: Range<f32>| (range.start * SCALE) as u32..(range.end * SCALE) as u32;
+        pixels(y).any(|py| pixels(x.clone()).any(|px| self.pixel(px, py)[0] < 80))
+    }
 }
 
 fn rgb_of(hex: &str) -> [u8; 3] {
@@ -64,121 +71,142 @@ fn rgb_of(hex: &str) -> [u8; 3] {
     [channel(1), channel(3), channel(5)]
 }
 
-#[test]
-fn a_synthetic_marathon_renders_to_a_card_with_km_30_in_the_fastest_colour() {
-    let xml = common::synthetic_gpx(MARATHON_M, marathon_pace, START);
-    let path = common::write_fixture("render-marathon.gpx", &xml);
-    let analysis = splits::analyze(&gpx::load(&path).unwrap()).unwrap();
-    let meta = Meta {
-        runner: "Julia Brandt".into(),
-        event: "Berlin Marathon".into(),
-        city: Some("Berlin".into()),
-        date: date!(2026 - 09 - 27),
-    };
-    let data = card::build(
-        &analysis,
-        &meta,
-        &Palette::light(),
-        &TextMeasure::new(),
-        Variant::Classic,
+fn assert_colour(actual: [u8; 3], hex: &str, what: &str) {
+    let expected = rgb_of(hex);
+    assert!(
+        actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 3),
+        "{what} is {actual:?}, expected {hex}"
     );
+}
+
+fn meta(runner: &str, event: &str, city: Option<&str>) -> Meta {
+    Meta {
+        runner: runner.into(),
+        event: event.into(),
+        city: city.map(Into::into),
+        date: date!(2026 - 04 - 19),
+    }
+}
+
+/// The ribbon card of the GPX `xml` for `meta`, in light.
+fn card_of(xml: &str, name: &str, meta: &Meta) -> CardData {
+    let path = common::write_fixture(name, xml);
+    let analysis = splits::analyze(&gpx::load(&path).unwrap()).unwrap();
+    card::build(
+        &analysis,
+        meta,
+        &Palette::for_theme(Theme::Light),
+        &TextMeasure::new(),
+        Variant::Ribbon,
+        Theme::Light,
+    )
+}
+
+#[test]
+fn a_synthetic_half_renders_to_the_frame_with_its_texts_legend_and_rule() {
+    let xml = common::synthetic_gpx(HALF_M, half_pace, START);
+    let data = card_of(
+        &xml,
+        "render-half.gpx",
+        &meta("Mara Lindqvist", "Harbour Half", Some("Lisbon")),
+    );
+    assert_eq!(data.fastest, "km 21 \u{b7} 4:48");
     let renderer = Renderer::new().unwrap();
     let svg = renderer.svg(&data).unwrap();
     let image = Image::decode(&renderer.png(&svg, SCALE).unwrap());
+    let light = Theme::Light.tokens();
 
     assert_eq!((image.width, image.height), (1440, 2000));
-    assert_eq!(image.pixel(10, 10), rgb_of(BACKGROUND));
+    assert_colour(image.at(5.0, 5.0), light.paper, "the paper");
     assert!(
-        has_dark_pixels(&image, 40.0..300.0, 650.0..700.0),
-        "the runner's name is not drawn"
+        image.has_dark_pixels(48.0..300.0, 62.0..92.0),
+        "the title is not drawn"
     );
-    assert!(svg.contains("JULIA BRANDT"), "{svg}");
-    assert!(svg.contains("FASTEST KM 30"), "{svg}");
-    assert!(svg.contains(">KM</text>"), "{svg}");
-
-    let x = data.fastest_x.expect("a fastest marker") * SCALE;
-    let y = (STRIPE_TOP + STRIPE_HALF_HEIGHT) * SCALE;
-    let actual = image.pixel(x as u32, y as u32);
-    let expected = rgb_of(FASTEST_COLOUR);
-    for (a, e) in actual.iter().zip(expected) {
+    assert!(
+        image.has_dark_pixels(48.0..200.0, 840.0..884.0),
+        "the time is not drawn"
+    );
+    assert!(
+        image.has_dark_pixels(48.0..200.0, 924.0..937.0),
+        "the name is not drawn"
+    );
+    assert!(
+        image.has_dark_pixels(560.0..672.0, 822.0..837.0),
+        "the distance is not drawn"
+    );
+    assert_colour(
+        image.at(49.0, 761.0),
+        &data.legend[0],
+        "the slow end of the legend",
+    );
+    assert_colour(
+        image.at(206.0, 761.0),
+        &data.legend[31],
+        "the fast end of the legend",
+    );
+    assert_colour(image.at(360.0, 800.5), light.rule, "the rule");
+    for text in [
+        "Harbour Half",
+        "Lisbon \u{b7} 19 April 2026",
+        "Mara Lindqvist",
+        "21.10 km",
+        "km 21 \u{b7} 4:48",
+    ] {
         assert!(
-            a.abs_diff(e) <= 3,
-            "km 30 is {actual:?}, the fastest colour {expected:?}"
+            svg.contains(&format!(">{text}</text>")),
+            "no {text:?} in {svg}"
         );
     }
 }
 
 #[test]
-fn a_run_under_a_kilometre_has_no_km_axis_label_and_no_empty_fastest_line() {
+fn a_run_under_a_kilometre_has_no_fastest_pair_and_no_empty_text() {
     let xml = common::synthetic_gpx(600.0, |_| 300.0, START);
-    let path = common::write_fixture("render-600m.gpx", &xml);
-    let analysis = splits::analyze(&gpx::load(&path).unwrap()).unwrap();
-    let meta = Meta {
-        runner: "Julia Brandt".into(),
-        event: "Lunch Run".into(),
-        city: None,
-        date: date!(2026 - 09 - 27),
-    };
-    let data = card::build(
-        &analysis,
-        &meta,
-        &Palette::light(),
-        &TextMeasure::new(),
-        Variant::Classic,
+    let data = card_of(
+        &xml,
+        "render-600m.gpx",
+        &meta("Mara Lindqvist", "Lunch Run", None),
     );
-    assert!(
-        data.ticks.is_empty() && data.fastest_line.is_empty(),
-        "{data:?}"
-    );
+    assert_eq!(data.fastest, "");
     let svg = Renderer::new().unwrap().svg(&data).unwrap();
-
-    assert!(!svg.contains(">KM</text>"), "{svg}");
+    assert!(!svg.contains(">fastest</text>"), "{svg}");
     assert!(!svg.contains("></text>"), "an empty text element in {svg}");
-}
-
-/// Whether any pixel in the card-pixel rectangle `x` by `y` is dark (red below 80).
-fn has_dark_pixels(image: &Image, x: std::ops::Range<f32>, y: std::ops::Range<f32>) -> bool {
-    let pixels =
-        |range: std::ops::Range<f32>| (range.start * SCALE) as u32..(range.end * SCALE) as u32;
-    pixels(y).any(|py| pixels(x.clone()).any(|px| image.pixel(px, py)[0] < 80))
+    assert!(svg.contains(">19 April 2026</text>"), "{svg}");
 }
 
 #[test]
-fn long_names_and_titles_stay_inside_the_card() {
-    let xml = common::synthetic_gpx(MARATHON_M, marathon_pace, START);
-    let path = common::write_fixture("render-long-names.gpx", &xml);
-    let analysis = splits::analyze(&gpx::load(&path).unwrap()).unwrap();
-    let meta = Meta {
-        runner: "Maximilian Oberhauser-Lindqvist".into(),
-        event: "Schneider Electric Marathon de Paris".into(),
-        city: Some("Paris".into()),
-        date: date!(2026 - 04 - 12),
-    };
-    let data = card::build(
-        &analysis,
-        &meta,
-        &Palette::light(),
-        &TextMeasure::new(),
-        Variant::Classic,
+fn long_names_and_titles_stay_inside_the_content_box() {
+    let xml = common::synthetic_gpx(HALF_M, half_pace, START);
+    let meta = meta(
+        "Maximilian Alexander Konstantin Oberhauser-Lindqvist zu Hohenzollern-Sigmaringen und Waldburg",
+        "Schneider Electric Marathon de Paris, presented by the City of Paris and Friends",
+        Some("Llanfairpwllgwyngyllgogerychwyrndrobwllllantysiliogogogoch, Isle of Anglesey, Wales, United Kingdom"),
     );
+    let data = card_of(&xml, "render-long-names.gpx", &meta);
     let image = Image::decode(&Renderer::new().unwrap().render(&data, SCALE).unwrap());
 
     assert!(
-        has_dark_pixels(&image, 40.0..300.0, 650.0..700.0),
-        "the name is not drawn"
-    );
-    assert!(
-        !has_dark_pixels(&image, 549.0..561.0, 630.0..710.0),
-        "the name runs into the route box"
-    );
-    assert!(
-        has_dark_pixels(&image, 40.0..300.0, 90.0..135.0),
+        image.has_dark_pixels(48.0..300.0, 66.0..92.0),
         "the title is not drawn"
     );
     assert!(
-        !has_dark_pixels(&image, 690.0..720.0, 75.0..145.0),
-        "the title runs off the card"
+        image.has_dark_pixels(48.0..300.0, 924.0..937.0),
+        "the name is not drawn"
     );
+    let paper = rgb_of(Theme::Light.tokens().paper);
+    let right_of_the_box = (674.0 * SCALE) as u32..(720.0 * SCALE) as u32;
+    for (what, rows) in [
+        ("title", 60.0..100.0),
+        ("subline", 106.0..122.0),
+        ("name", 922.0..940.0),
+    ] {
+        let rows = (rows.start * SCALE) as u32..(rows.end * SCALE) as u32;
+        assert!(
+            rows.clone()
+                .all(|y| right_of_the_box.clone().all(|x| image.pixel(x, y) == paper)),
+            "the {what} draws right of x 674"
+        );
+    }
 }
 
 fn sample_gpx() -> PathBuf {
@@ -206,9 +234,9 @@ fn the_binary_renders_the_sample_and_reports_its_timing() {
     let output = runcard(&[
         sample_gpx().as_os_str(),
         "--runner".as_ref(),
-        "Julia Brandt".as_ref(),
+        "Mara Lindqvist".as_ref(),
         "--city".as_ref(),
-        "Berlin".as_ref(),
+        "Lisbon".as_ref(),
         "--svg".as_ref(),
         svg.as_os_str(),
         "-o".as_ref(),
@@ -223,7 +251,7 @@ fn the_binary_renders_the_sample_and_reports_its_timing() {
     let image = Image::decode(&std::fs::read(&png).expect("the png is written"));
     assert_eq!((image.width, image.height), (1440, 2000));
     let svg_text = std::fs::read_to_string(&svg).expect("the svg is written");
-    assert!(svg_text.contains("JULIA BRANDT"), "{svg_text}");
+    assert!(svg_text.contains(">Mara Lindqvist</text>"), "{svg_text}");
     let stages: Vec<&str> = stderr
         .lines()
         .map(|line| line.split(' ').next().unwrap_or_default())
@@ -233,8 +261,6 @@ fn the_binary_renders_the_sample_and_reports_its_timing() {
         ["parse", "analyze", "layout", "svg", "png", "total"],
         "{stderr}"
     );
-    assert!(stderr.contains("total"), "{stderr}");
-    assert!(stdout.contains("wrote"), "{stdout}");
 }
 
 #[test]
@@ -251,7 +277,7 @@ fn a_missing_input_fails_with_exit_code_1_and_names_the_file() {
     let output = runcard(&[
         missing.as_os_str(),
         "--runner".as_ref(),
-        "Julia Brandt".as_ref(),
+        "Mara Lindqvist".as_ref(),
     ]);
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -273,7 +299,7 @@ fn a_track_without_timestamps_fails_with_exit_code_1_and_names_the_analysis() {
     let output = runcard(&[
         path.as_os_str(),
         "--runner".as_ref(),
-        "Julia Brandt".as_ref(),
+        "Mara Lindqvist".as_ref(),
     ]);
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -293,7 +319,7 @@ fn an_invalid_gpx_fails_with_exit_code_1_and_names_the_file() {
     let output = runcard(&[
         path.as_os_str(),
         "--runner".as_ref(),
-        "Julia Brandt".as_ref(),
+        "Mara Lindqvist".as_ref(),
     ]);
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -304,42 +330,82 @@ fn an_invalid_gpx_fails_with_exit_code_1_and_names_the_file() {
     assert!(stderr.contains("invalid gpx"), "{stderr}");
 }
 
-#[test]
-fn the_binary_renders_the_variant_it_is_given() {
-    let png = output_path("cli-noir.png");
-    let output = runcard(&[
-        sample_gpx().as_os_str(),
+/// Runs the binary on the sample at scale 1 with `args` and returns the PNG.
+fn render_sample(name: &str, args: &[&str]) -> Image {
+    let png = output_path(name);
+    let sample = sample_gpx();
+    let mut all: Vec<&std::ffi::OsStr> = vec![
+        sample.as_os_str(),
         "--runner".as_ref(),
-        "Julia Brandt".as_ref(),
-        "--variant".as_ref(),
-        "noir".as_ref(),
+        "Mara Lindqvist".as_ref(),
         "--scale".as_ref(),
         "1".as_ref(),
         "-o".as_ref(),
         png.as_os_str(),
-    ]);
+    ];
+    all.extend(args.iter().map(|arg| std::ffi::OsStr::new(*arg)));
+    let output = runcard(&all);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{}\n{stderr}", output.status);
-    let image = Image::decode(&std::fs::read(&png).expect("the png is written"));
+    Image::decode(&std::fs::read(&png).expect("the png is written"))
+}
+
+#[test]
+fn the_binary_renders_every_variant_it_is_given_on_light_paper() {
+    for variant in Variant::ALL {
+        let image = render_sample(
+            &format!("cli-{variant}.png"),
+            &["--variant", variant.name()],
+        );
+        assert_eq!((image.width, image.height), (720, 1000), "{variant}");
+        assert_eq!(
+            image.pixel(0, 0),
+            rgb_of(Theme::Light.tokens().paper),
+            "{variant}"
+        );
+    }
+}
+
+#[test]
+fn theme_dark_renders_the_card_on_dark_paper() {
+    let image = render_sample("cli-dark.png", &["--theme", "dark"]);
     assert_eq!((image.width, image.height), (720, 1000));
     assert_eq!(image.pixel(0, 0), rgb_of("#0f1115"));
 }
 
+/// The exit code and stderr of the binary on the sample with `args`.
+fn rejected(args: &[&str]) -> (Option<i32>, String) {
+    let sample = sample_gpx();
+    let mut all: Vec<&std::ffi::OsStr> = vec![
+        sample.as_os_str(),
+        "--runner".as_ref(),
+        "Mara Lindqvist".as_ref(),
+    ];
+    all.extend(args.iter().map(|arg| std::ffi::OsStr::new(*arg)));
+    let output = runcard(&all);
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
 #[test]
 fn an_unknown_variant_exits_with_code_2_listing_the_variants() {
-    let output = runcard(&[
-        sample_gpx().as_os_str(),
-        "--runner".as_ref(),
-        "Julia Brandt".as_ref(),
-        "--variant".as_ref(),
-        "nope".as_ref(),
-    ]);
-    assert_eq!(output.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let (code, stderr) = rejected(&["--variant", "nope"]);
+    assert_eq!(code, Some(2), "{stderr}");
     assert!(stderr.contains("'nope'"), "{stderr}");
     assert!(stderr.contains("--variant"), "{stderr}");
     assert!(
-        stderr.contains("classic, noir, rings, route, bars, mosaic"),
+        stderr.contains("ribbon, spiral, trail, dots, wave, ledger"),
         "{stderr}"
     );
+}
+
+#[test]
+fn an_unknown_theme_exits_with_code_2_listing_the_themes() {
+    let (code, stderr) = rejected(&["--theme", "nope"]);
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("'nope'"), "{stderr}");
+    assert!(stderr.contains("--theme"), "{stderr}");
+    assert!(stderr.contains("light, dark"), "{stderr}");
 }
