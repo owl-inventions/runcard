@@ -25,6 +25,12 @@
   </g>
   <text x="48" y="780" {{ font.label }} font-size="11" fill="{{ theme.muted }}">slower</text>
   <text x="208" y="780" text-anchor="end" {{ font.label }} font-size="11" fill="{{ theme.muted }}">faster</text>
+{#- The route in miniature on the row of the legend, flush right in the box
+    x 472 to 672, y 734 to 790. Outside the visualisation, so it never glows. #}
+{%- if route %}
+  <path d="{{ route.path }}" fill="none" stroke="{{ theme.ink }}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="{{ route.start.x }}" cy="{{ route.start.y }}" r="2.5" fill="{{ theme.ink }}"/>
+{%- endif %}
 
   <rect x="48" y="800" width="624" height="1" fill="{{ theme.rule }}"/>
 

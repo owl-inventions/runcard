@@ -82,10 +82,10 @@ impl Image {
         [self.rgb[i], self.rgb[i + 1], self.rgb[i + 2]]
     }
 
-    /// How many pixels in the rows `y` differ from `paper` by more than 2 in
-    /// any channel.
-    fn inked(&self, y: Range<u32>, paper: [u8; 3]) -> usize {
-        y.flat_map(|y| (0..self.width).map(move |x| (x, y)))
+    /// How many pixels in the columns `x` of the rows `y` differ from `paper`
+    /// by more than 2 in any channel.
+    fn inked(&self, x: Range<u32>, y: Range<u32>, paper: [u8; 3]) -> usize {
+        y.flat_map(|y| x.clone().map(move |x| (x, y)))
             .filter(|&(x, y)| {
                 self.pixel(x, y)
                     .iter()
@@ -99,6 +99,12 @@ impl Image {
 fn rgb_of(hex: &str) -> [u8; 3] {
     let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).expect("a hex colour");
     [channel(1), channel(3), channel(5)]
+}
+
+/// The markup before the legend: the visualisation (twice on dark paper),
+/// without the route preview the frame draws after the legend.
+fn picture(svg: &str) -> &str {
+    &svg[..svg.find(">slower</text>").expect("the legend")]
 }
 
 /// Every start tag `<{name} ...>` in `svg`.
@@ -145,7 +151,10 @@ fn the_dark_theme_draws_each_visualisation_twice_and_the_light_theme_once() {
     for variant in VARIANTS {
         let light = svg_of(variant, Theme::Light);
         let dark = svg_of(variant, Theme::Dark);
-        let drawn = |svg: &str| tags(svg, "path").len() + tags(svg, "circle").len();
+        let drawn = |svg: &str| {
+            let picture = picture(svg);
+            tags(picture, "path").len() + tags(picture, "circle").len()
+        };
         assert!(drawn(&light) > SPLITS, "{variant}: {light}");
         assert_eq!(drawn(&dark), 2 * drawn(&light), "{variant}");
         // No id inside the visualisation, which the glow repeats: only the filter has one.
@@ -156,8 +165,9 @@ fn the_dark_theme_draws_each_visualisation_twice_and_the_light_theme_once() {
 
 #[test]
 fn spiral_draws_one_butt_capped_segment_per_kilometre_with_its_markers() {
-    let svg = svg_of(Variant::Spiral, Theme::Light);
-    let paths = tags(&svg, "path");
+    let card = svg_of(Variant::Spiral, Theme::Light);
+    let svg = picture(&card);
+    let paths = tags(svg, "path");
     assert_eq!(paths.len(), SPLITS, "{svg}");
     let width = attr(paths[0], "stroke-width").expect("a stroke width");
     for path in &paths {
@@ -172,7 +182,7 @@ fn spiral_draws_one_butt_capped_segment_per_kilometre_with_its_markers() {
     assert!((4.0..=16.0).contains(&width), "{width}");
 
     let ink = Theme::Light.tokens().ink;
-    let circles = tags(&svg, "circle");
+    let circles = tags(svg, "circle");
     assert_eq!(
         circles.len(),
         2,
@@ -191,7 +201,7 @@ fn spiral_draws_one_butt_capped_segment_per_kilometre_with_its_markers() {
     let r: f32 = attr(ring, "r").unwrap().parse().unwrap();
     assert!((r - (width / 2.0 + 4.0)).abs() < 0.01, "{ring}");
 
-    let squares: Vec<&str> = tags(&svg, "rect")
+    let squares: Vec<&str> = tags(svg, "rect")
         .into_iter()
         .filter(|r| attr(r, "width") == Some("6"))
         .collect();
@@ -245,7 +255,7 @@ fn trail_draws_one_round_stroke_per_kilometre_and_the_start_and_finish() {
 fn dots_draws_one_numbered_circle_per_kilometre_and_rings_the_fastest() {
     let svg = svg_of(Variant::Dots, Theme::Light);
     let tokens = Theme::Light.tokens();
-    let circles = tags(&svg, "circle");
+    let circles = tags(picture(&svg), "circle");
     assert_eq!(circles.len(), SPLITS + 1, "{svg}");
     let rings: Vec<&&str> = circles
         .iter()
@@ -288,10 +298,25 @@ fn nothing_is_drawn_between_the_title_block_and_the_zone_or_the_zone_and_the_leg
             .png(run().as_bytes(), &request(variant, Theme::Light))
             .unwrap();
         let image = Image::decode(&png);
-        assert_eq!(image.inked(126..158, paper), 0, "{variant} above the zone");
-        assert_eq!(image.inked(722..756, paper), 0, "{variant} below the zone");
+        assert_eq!(
+            image.inked(0..720, 126..158, paper),
+            0,
+            "{variant} above the zone"
+        );
+        // The route preview, start marker included, inks at most x 469.5 to
+        // 674.5 and y 731.5 to 792.5 (none for trail).
+        assert_eq!(
+            image.inked(0..720, 722..731, paper),
+            0,
+            "{variant} below the zone"
+        );
+        assert_eq!(
+            image.inked(0..469, 731..756, paper),
+            0,
+            "{variant} below the zone, left of the route preview"
+        );
         assert!(
-            image.inked(160..720, paper) > 2000,
+            image.inked(0..720, 160..720, paper) > 2000,
             "{variant} draws in the zone"
         );
     }

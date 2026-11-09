@@ -42,7 +42,9 @@ runcard examples/sample.gpx --runner "Mara Lindqvist" --city Lisbon
 
 Six pictures of the same splits, chosen with `--variant` or the `variant`
 part, each in the same frame and on either theme. All are rendered from
-`examples/sample.gpx`.
+`examples/sample.gpx`. Every variant but `trail`, whose picture is the route,
+also shows the course in miniature right of the legend, so each run stays
+recognisable.
 
 | `ribbon` | `spiral` | `trail` |
 | --- | --- | --- |

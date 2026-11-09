@@ -64,6 +64,12 @@ impl Image {
         let pixels = |range: Range<f32>| (range.start * SCALE) as u32..(range.end * SCALE) as u32;
         pixels(y).any(|py| pixels(x.clone()).any(|px| self.pixel(px, py)[0] < 80))
     }
+
+    /// Whether every pixel in the card-pixel rectangle `x` by `y` is `colour`.
+    fn is_all(&self, x: Range<f32>, y: Range<f32>, colour: [u8; 3]) -> bool {
+        let pixels = |range: Range<f32>| (range.start * SCALE) as u32..(range.end * SCALE) as u32;
+        pixels(y).all(|py| pixels(x.clone()).all(|px| self.pixel(px, py) == colour))
+    }
 }
 
 fn rgb_of(hex: &str) -> [u8; 3] {
@@ -90,6 +96,11 @@ fn meta(runner: &str, event: &str, city: Option<&str>) -> Meta {
 
 /// The ribbon card of the GPX `xml` for `meta`, in light.
 fn card_of(xml: &str, name: &str, meta: &Meta) -> CardData {
+    card_as(xml, name, meta, Variant::Ribbon)
+}
+
+/// The `variant` card of the GPX `xml` for `meta`, in light.
+fn card_as(xml: &str, name: &str, meta: &Meta, variant: Variant) -> CardData {
     let path = common::write_fixture(name, xml);
     let analysis = splits::analyze(&gpx::load(&path).unwrap()).unwrap();
     card::build(
@@ -97,7 +108,7 @@ fn card_of(xml: &str, name: &str, meta: &Meta) -> CardData {
         meta,
         &Palette::for_theme(Theme::Light),
         &TextMeasure::new(),
-        Variant::Ribbon,
+        variant,
         Theme::Light,
     )
 }
@@ -205,6 +216,40 @@ fn long_names_and_titles_stay_inside_the_content_box() {
             rows.clone()
                 .all(|y| right_of_the_box.clone().all(|x| image.pixel(x, y) == paper)),
             "the {what} draws right of x 674"
+        );
+    }
+}
+
+#[test]
+fn the_route_preview_is_inked_flush_right_in_its_box_and_clear_of_the_rule() {
+    // A loop taller than the 200 x 56 box: it spans y 734 to 790 and is moved
+    // right; it starts on its southern edge, so the start marker reaches y 792.5.
+    let xml = common::synthetic_gpx(HALF_M, half_pace, START);
+    let meta = meta("Mara Lindqvist", "Harbour Half", Some("Lisbon"));
+    let renderer = Renderer::new().unwrap();
+    let paper = rgb_of(Theme::Light.tokens().paper);
+    for variant in Variant::ALL {
+        let name = format!("render-preview-{variant}.gpx");
+        let data = card_as(&xml, &name, &meta, variant);
+        let image = Image::decode(&renderer.render(&data, SCALE).unwrap());
+        let previewed = variant != Variant::Trail;
+        assert_eq!(
+            image.has_dark_pixels(472.0..673.0, 734.0..791.0),
+            previewed,
+            "{variant}: the preview box"
+        );
+        assert_eq!(
+            image.has_dark_pixels(670.0..673.0, 734.0..791.0),
+            previewed,
+            "{variant}: flush right at x 672"
+        );
+        assert!(
+            image.is_all(674.0..720.0, 724.0..800.0, paper),
+            "{variant}: ink right of x 674"
+        );
+        assert!(
+            image.is_all(0.0..720.0, 793.0..800.0, paper),
+            "{variant}: ink between the preview and the rule"
         );
     }
 }

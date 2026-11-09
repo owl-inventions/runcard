@@ -88,6 +88,15 @@ pub struct SplitView {
     pub t: f32,
 }
 
+/// The route in miniature, drawn by the frame right of the legend.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RoutePreview {
+    /// SVG path data of the simplified route.
+    pub path: String,
+    /// Centre of the start marker, the first point of the route.
+    pub start: (f32, f32),
+}
+
 /// The minijinja context for `templates/<variant>.svg` and the shared
 /// `templates/frame.svg`: every value already laid out (card pixels) and
 /// formatted (display strings).
@@ -106,6 +115,10 @@ pub struct CardData {
     pub subline: String,
     /// The colours of the legend bar, slowest first.
     pub legend: Vec<String>,
+    /// The route in miniature, flush right on the row of the legend; `None`
+    /// for the `trail` variant, whose picture is the route, and for a track
+    /// with fewer than two distinct points.
+    pub route: Option<RoutePreview>,
     /// The finish time, e.g. `1:48:58`.
     pub time: String,
     /// The distance, e.g. `21.46 km`.

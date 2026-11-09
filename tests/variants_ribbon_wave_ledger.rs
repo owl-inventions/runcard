@@ -93,6 +93,12 @@ fn rgb_of(hex: &str) -> [u8; 3] {
     [channel(1), channel(3), channel(5)]
 }
 
+/// The markup before the legend: the visualisation (twice on dark paper),
+/// without the route preview the frame draws after the legend.
+fn picture(svg: &str) -> &str {
+    &svg[..svg.find(">slower</text>").expect("the legend")]
+}
+
 /// The ribbon's bars: rounded rects from x 88 (the legend has a plain one there).
 fn bars(svg: &str) -> usize {
     svg.split("<rect ")
@@ -193,7 +199,11 @@ fn wave_draws_a_section_into_every_kilometre_after_the_first_over_its_fill() {
         // Eleven points, ten sections between them, and the fill.
         let sections = r#"stroke-width="4" stroke-linecap="round""#;
         assert_eq!(svg.matches(sections).count(), 10 * copies, "{theme}: {svg}");
-        assert_eq!(svg.matches("<path ").count(), 11 * copies, "{theme}");
+        assert_eq!(
+            picture(&svg).matches("<path ").count(),
+            11 * copies,
+            "{theme}"
+        );
         let fill = format!(r#"fill="{}" opacity="0.06""#, theme.tokens().ink);
         assert_eq!(svg.matches(&fill).count(), copies, "{theme}: {svg}");
         assert_eq!(svg.matches(r#" 700Z""#).count(), copies, "{theme}: {svg}");
@@ -271,11 +281,11 @@ fn a_single_split_is_one_bar_one_level_line_and_one_row() {
     assert_eq!(split_count(&xml), 1);
     let ribbon = svg_of(&xml, Variant::Ribbon, Theme::Light);
     assert_eq!(bars(&ribbon), 1, "{ribbon}");
-    assert!(!ribbon.contains(r#"fill="none""#), "{ribbon}");
+    assert!(!picture(&ribbon).contains(r#"fill="none""#), "{ribbon}");
 
     let wave = svg_of(&xml, Variant::Wave, Theme::Light);
     assert_eq!(
-        wave.matches(r#"stroke-linecap="round""#).count(),
+        picture(&wave).matches(r#"stroke-linecap="round""#).count(),
         1,
         "{wave}"
     );
@@ -308,9 +318,11 @@ fn on_light_paper_nothing_is_drawn_between_the_title_block_the_zone_and_the_lege
                 [rgb[i], rgb[i + 1], rgb[i + 2]]
             };
             // Under the subline down to the zone, and under the zone down to
-            // the legend.
+            // the legend, left of the route preview, which inks at most x
+            // 469.5 to 674.5 and y 731.5 to 792.5 with its start marker.
             for y in (124..158).chain(722..756) {
-                for x in 0..720 {
+                let columns = if y < 731 { 0..720 } else { 0..469 };
+                for x in columns {
                     assert_eq!(pixel(x, y), paper, "{variant}: ink at ({x}, {y})");
                 }
             }
