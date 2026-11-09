@@ -1,0 +1,116 @@
+name: Main CI
+
+# On every push to main: tags the commit, runs lint and tests, and pushes the
+# runcard-server image to the public ECR for dev and stable. There is no
+# deploy job yet; runcard has no entry in argo-manifests until it is wired
+# into owl-orbit.
+concurrency:
+  group: main
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  create-tag:
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.github-tag-action.outputs.new_tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: "0"
+      - id: github-tag-action
+        uses: anothrNick/github-tag-action@1.75.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WITH_V: true
+
+  lint:
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    name: Lint
+    container:
+      image: catthehacker/ubuntu:act-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+  unit-tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    name: Unit Tests
+    container:
+      image: catthehacker/ubuntu:act-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run tests
+        run: cargo test --locked --all-features
+
+  build-dev:
+    uses: owl-inventions/owl-github-actions/.github/workflows/docker-build-and-push-public-ecr.yml@v0.27.0
+    needs:
+      - create-tag
+    with:
+      tag: ${{ needs.create-tag.outputs.tag }}
+      app: runcard-server
+      file: Dockerfile
+      context: .
+      environment: dev
+    secrets:
+      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+  build-prod:
+    uses: owl-inventions/owl-github-actions/.github/workflows/docker-build-and-push-public-ecr.yml@v0.27.0
+    needs:
+      - create-tag
+    with:
+      tag: ${{ needs.create-tag.outputs.tag }}
+      app: runcard-server
+      file: Dockerfile
+      context: .
+      environment: stable
+    secrets:
+      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
