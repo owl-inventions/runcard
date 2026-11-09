@@ -107,6 +107,20 @@ The binaries are `target/release/runcard` (the CLI) and
 template are compiled into both, so they run without any other files.
 `cargo test` runs the test suite.
 
+### Docker
+
+```
+docker build -t runcard-server .
+docker run --rm -p 8080:8080 -e RUNCARD_ALLOW_ORIGIN=https://example.com runcard-server
+```
+
+The `Dockerfile` builds `runcard-server` in a `rust:1.99-bookworm` stage and
+copies the binary into `gcr.io/distroless/cc-debian12:nonroot`, about 12 MB
+in all, running as `nonroot` on port 8080. The cargo registry and the target
+directory are BuildKit cache mounts, so rebuilding after a code change does
+not recompile the dependencies. The server stops cleanly on the SIGTERM that
+`docker stop` sends.
+
 ## Fonts
 
 The card uses IBM Plex Mono, Fraunces and Bebas Neue, all under the SIL Open

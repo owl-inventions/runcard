@@ -1,0 +1,6 @@
+target
+.git
+examples
+tests
+README.md
+*.png
