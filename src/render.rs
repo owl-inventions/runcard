@@ -155,15 +155,16 @@ fn theme_value(theme: &Tokens) -> Value {
     }
 }
 
-/// `font.display`, `font.numeral`, `font.label`, `font.text` and `font.mono`:
-/// the family and variation attributes of each role, marked safe so the
-/// quotes survive auto-escaping.
+/// `font.display`, `font.numeral`, `font.label`, `font.name`, `font.text` and
+/// `font.mono`: the family and variation attributes of each role, marked safe
+/// so the quotes survive auto-escaping.
 fn font_value() -> Value {
     let attributes = |role: Role| Value::from_safe_string(role.attributes());
     context! {
         display => attributes(Role::Display),
         numeral => attributes(Role::Numeral),
         label => attributes(Role::Label),
+        name => attributes(Role::Name),
         text => attributes(Role::Text),
         mono => attributes(Role::Mono),
     }
@@ -432,9 +433,9 @@ mod tests {
             &[
                 r#"x="48""#,
                 r#"y="936""#,
-                r#"font-size="14""#,
+                r#"font-size="18""#,
                 ink,
-                &Role::Label.attributes(),
+                &Role::Name.attributes(),
             ],
         );
         assert!(!svg.contains("MARA"), "{svg}");
@@ -825,6 +826,7 @@ mod tests {
             ("display", Role::Display),
             ("numeral", Role::Numeral),
             ("label", Role::Label),
+            ("name", Role::Name),
             ("text", Role::Text),
             ("mono", Role::Mono),
         ] {

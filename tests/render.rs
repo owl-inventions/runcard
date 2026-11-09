@@ -209,7 +209,7 @@ fn long_names_and_titles_stay_inside_the_content_box() {
     for (what, rows) in [
         ("title", 60.0..100.0),
         ("subline", 106.0..122.0),
-        ("name", 922.0..940.0),
+        ("name", 918.0..944.0),
     ] {
         let rows = (rows.start * SCALE) as u32..(rows.end * SCALE) as u32;
         assert!(
@@ -217,6 +217,29 @@ fn long_names_and_titles_stay_inside_the_content_box() {
                 .all(|y| right_of_the_box.clone().all(|x| image.pixel(x, y) == paper)),
             "the {what} draws right of x 674"
         );
+    }
+}
+
+#[test]
+fn the_runner_is_set_semibold_at_18_px_on_the_baseline_936() {
+    let xml = common::synthetic_gpx(HALF_M, half_pace, START);
+    let data = card_of(
+        &xml,
+        "render-name.gpx",
+        &meta("Mara Lindqvist", "Harbour Half", Some("Lisbon")),
+    );
+    let svg = Renderer::new().unwrap().svg(&data).unwrap();
+    let end = svg
+        .find(">Mara Lindqvist</text>")
+        .unwrap_or_else(|| panic!("no name in {svg}"));
+    let tag = &svg[svg[..end].rfind("<text").expect("a text start tag")..=end];
+    for attribute in [
+        r#"x="48""#,
+        r#"y="936""#,
+        r#"font-size="18""#,
+        "'wdth' 100, 'wght' 600",
+    ] {
+        assert!(tag.contains(attribute), "no {attribute} in {tag}");
     }
 }
 

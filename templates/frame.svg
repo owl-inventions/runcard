@@ -44,5 +44,5 @@
   <text x="672" y="900" text-anchor="end" {{ font.text }} font-size="20" fill="{{ theme.ink }}">{{ fastest }}</text>
 {%- endif %}
 
-  <text x="48" y="936" {{ font.label }} font-size="14" fill="{{ theme.ink }}">{{ runner }}</text>
+  <text x="48" y="936" {{ font.name }} font-size="18" fill="{{ theme.ink }}">{{ runner }}</text>
 </svg>

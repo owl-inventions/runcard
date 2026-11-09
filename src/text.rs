@@ -49,8 +49,10 @@ pub enum Role {
     Display,
     /// The big finish time: Archivo condensed, medium.
     Numeral,
-    /// Small labels and the runner's name: Archivo, medium.
+    /// Small labels and the line under the title: Archivo, medium.
     Label,
+    /// The runner's name: Archivo, semibold.
+    Name,
     /// The values in the footer: Archivo, regular.
     Text,
     /// Kilometre numbers and paces inside the visualisations: JetBrains Mono, medium.
@@ -59,10 +61,11 @@ pub enum Role {
 
 impl Role {
     /// Every role, in the order of the design system.
-    pub const ALL: [Role; 5] = [
+    pub const ALL: [Role; 6] = [
         Role::Display,
         Role::Numeral,
         Role::Label,
+        Role::Name,
         Role::Text,
         Role::Mono,
     ];
@@ -79,14 +82,14 @@ impl Role {
         match self {
             Role::Display => 112.0,
             Role::Numeral => 85.0,
-            Role::Label | Role::Text | Role::Mono => 100.0,
+            Role::Label | Role::Name | Role::Text | Role::Mono => 100.0,
         }
     }
 
     /// The `wght` coordinate.
     pub fn wght(self) -> f32 {
         match self {
-            Role::Display => 600.0,
+            Role::Display | Role::Name => 600.0,
             Role::Text => 400.0,
             Role::Numeral | Role::Label | Role::Mono => 500.0,
         }
@@ -271,6 +274,7 @@ mod tests {
                 (Role::Display, Face::Archivo, 112.0, 600.0),
                 (Role::Numeral, Face::Archivo, 85.0, 500.0),
                 (Role::Label, Face::Archivo, 100.0, 500.0),
+                (Role::Name, Face::Archivo, 100.0, 600.0),
                 (Role::Text, Face::Archivo, 100.0, 400.0),
                 (Role::Mono, Face::JetBrainsMono, 100.0, 500.0),
             ]
@@ -286,6 +290,10 @@ mod tests {
         assert_eq!(
             Role::Numeral.attributes(),
             r#"font-family="Archivo" font-variation-settings="'wdth' 85, 'wght' 500""#
+        );
+        assert_eq!(
+            Role::Name.attributes(),
+            r#"font-family="Archivo" font-variation-settings="'wdth' 100, 'wght' 600""#
         );
         assert_eq!(
             Role::Mono.attributes(),
@@ -360,6 +368,18 @@ mod tests {
     }
 
     #[test]
+    fn the_name_is_set_bolder_than_a_label() {
+        let measure = TextMeasure::new();
+        let width = |role: Role| measure.width(role, "Mara Lindqvist", 18.0);
+        assert!(
+            width(Role::Label) < width(Role::Name),
+            "wght 600 is not wider than 500: Label {}, Name {}",
+            width(Role::Label),
+            width(Role::Name)
+        );
+    }
+
+    #[test]
     fn a_character_without_a_glyph_counts_as_the_average_advance() {
         let measure = TextMeasure::new();
         // OS/2 average advances: Archivo 575, JetBrains Mono 602 of 1000 units.
@@ -407,7 +427,7 @@ mod tests {
             (Role::Display, 28.0, "Schneider Electric Marathon de Paris"),
             (Role::Numeral, 72.0, "1:48:58"),
             (Role::Label, 12.0, "Lisbon \u{b7} 19 April 2026"),
-            (Role::Label, 14.0, "Maximilian Oberhauser-Lindqvist"),
+            (Role::Name, 18.0, "Maximilian Oberhauser-Lindqvist"),
             (Role::Text, 20.0, "21.10 km"),
             (Role::Mono, 11.0, "21"),
         ];
