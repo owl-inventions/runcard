@@ -1,0 +1,94 @@
+name: Dev CI
+
+# Runs the lint and test suite on every pull request against main, mirroring
+# the checks of Main CI, and builds the Docker image without pushing it, so a
+# release build that only breaks inside the image is caught before the merge.
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: dev-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    container:
+      image: catthehacker/ubuntu:act-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    container:
+      image: catthehacker/ubuntu:act-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run tests
+        run: cargo test --locked --all-features
+
+  docker-build:
+    name: Docker Build
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    container:
+      image: catthehacker/ubuntu:act-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Same Dockerfile, context and platform as the Main CI build, but the
+      # image is only built, never pushed.
+      - name: Build Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          platforms: linux/arm64
+          tags: runcard-server:${{ github.sha }}
