@@ -6,6 +6,7 @@ mod common;
 use std::ops::Range;
 
 use common::{Course, Shape};
+use runcard::palette::Palette;
 use runcard::pipeline::{CardRequest, Pipeline};
 use runcard::{Theme, Variant};
 use time::macros::datetime;
@@ -29,7 +30,7 @@ const PACES: &[f64] = &[
 ];
 /// Splits of the run: twelve full kilometres and the partial.
 const SPLITS: usize = 13;
-/// The pace of km 9, the fastest, as the callout labels it.
+/// The pace of km 9, the fastest, as the stats line sets it.
 const FASTEST_PACE: &str = "4:39";
 
 const VARIANTS: [Variant; 3] = [Variant::Spiral, Variant::Trail, Variant::Dots];
@@ -103,10 +104,39 @@ fn rgb_of(hex: &str) -> [u8; 3] {
     [channel(1), channel(3), channel(5)]
 }
 
-/// The markup before the legend: the visualisation (twice on dark paper),
-/// without the route preview the frame draws after the legend.
+/// How often the visualisation is drawn: once on light paper, twice on dark
+/// (the blurred glow under the crisp shapes).
+fn copies(theme: Theme) -> usize {
+    match theme {
+        Theme::Light => 1,
+        Theme::Dark => 2,
+    }
+}
+
+/// The visualisation alone (twice on dark paper): the markup between the
+/// header's subline and the rule above the legend.
 fn picture(svg: &str) -> &str {
-    &svg[..svg.find(">SLOWER</text>").expect("the legend")]
+    let subline = svg.find(r#"<text x="48" y="174""#).expect("the subline");
+    let start = subline + svg[subline..].find("</text>").expect("a closed subline");
+    &svg[start..svg.find(r#"<rect x="48" y="740""#).expect("the rule")]
+}
+
+/// The element each kilometre of `variant` is drawn as, and the attribute
+/// its colour is set in.
+fn kilometre(variant: Variant) -> (&'static str, &'static str) {
+    match variant {
+        Variant::Spiral | Variant::Trail => ("path", "stroke"),
+        Variant::Dots => ("circle", "fill"),
+        other => panic!("{other} is not a variant of this file"),
+    }
+}
+
+/// Every start tag in `svg` filled or stroked in `colour`.
+fn painted<'a>(svg: &'a str, colour: &str) -> Vec<&'a str> {
+    svg.match_indices('<')
+        .map(|(start, _)| &svg[start..start + svg[start..].find('>').expect("a closed tag")])
+        .filter(|tag| attr(tag, "fill") == Some(colour) || attr(tag, "stroke") == Some(colour))
+        .collect()
 }
 
 /// Every start tag `<{name} ...>` in `svg`.
@@ -130,30 +160,6 @@ fn texts<'a>(svg: &'a str, content: &str) -> Vec<&'a str> {
     svg.match_indices(&end)
         .map(|(at, _)| &svg[svg[..at].rfind("<text ").expect("a text start tag")..at])
         .collect()
-}
-
-/// The callout's pace: Mono 12 px in the marker colour, haloed in paper,
-/// once per copy of the picture.
-fn assert_pace_label(svg: &str, theme: Theme, what: &str) -> f32 {
-    let tokens = theme.tokens();
-    let labels = texts(picture(svg), FASTEST_PACE);
-    let copies = if theme == Theme::Dark { 2 } else { 1 };
-    assert_eq!(labels.len(), copies, "{what}: {labels:?}");
-    for tag in &labels {
-        assert!(
-            tag.contains(r#"font-family="JetBrains Mono""#),
-            "{what}: {tag}"
-        );
-        assert_eq!(attr(tag, "font-size"), Some("12"), "{what}: {tag}");
-        assert_eq!(attr(tag, "fill"), Some(tokens.marker), "{what}: {tag}");
-        assert_eq!(attr(tag, "stroke"), Some(tokens.paper), "{what}: {tag}");
-        assert_eq!(attr(tag, "paint-order"), Some("stroke"), "{what}: {tag}");
-    }
-    let x: f32 = attr(labels[0], "x").expect("an x").parse().unwrap();
-    assert!((48.0..=672.0).contains(&x), "{what}: {}", labels[0]);
-    let y: f32 = attr(labels[0], "y").expect("a y").parse().unwrap();
-    assert!((200.0..=724.0).contains(&y), "{what}: {}", labels[0]);
-    x
 }
 
 #[test]
@@ -189,7 +195,7 @@ fn the_dark_theme_draws_each_visualisation_twice_and_the_light_theme_once() {
             let picture = picture(svg);
             tags(picture, "path").len() + tags(picture, "circle").len()
         };
-        assert!(drawn(&light) > SPLITS, "{variant}: {light}");
+        assert!(drawn(&light) >= SPLITS, "{variant}: {light}");
         assert_eq!(drawn(&dark), 2 * drawn(&light), "{variant}");
         // No id inside the visualisation, which the glow repeats: only the
         // two filters have one.
@@ -199,7 +205,7 @@ fn the_dark_theme_draws_each_visualisation_twice_and_the_light_theme_once() {
 }
 
 #[test]
-fn spiral_draws_one_butt_capped_segment_per_kilometre_with_its_markers() {
+fn spiral_draws_one_butt_capped_segment_per_kilometre_its_start_dot_and_finish_square() {
     let card = svg_of(Variant::Spiral, Theme::Light);
     let svg = picture(&card);
     let paths = tags(svg, "path");
@@ -216,33 +222,16 @@ fn spiral_draws_one_butt_capped_segment_per_kilometre_with_its_markers() {
     let width: f32 = width.parse().unwrap();
     assert!((4.0..=16.0).contains(&width), "{width}");
 
-    let tokens = Theme::Light.tokens();
-    let ink = tokens.ink;
+    let ink = Theme::Light.tokens().ink;
     let circles = tags(svg, "circle");
-    assert_eq!(
-        circles.len(),
-        2,
-        "the start dot and the fastest ring: {circles:?}"
-    );
-    let dot = circles.iter().find(|c| attr(c, "r") == Some("3")).unwrap();
+    assert_eq!(circles.len(), 1, "only the start dot: {circles:?}");
+    let dot = circles[0];
+    assert_eq!(attr(dot, "r"), Some("3"));
     assert_eq!(attr(dot, "fill"), Some(ink));
     assert_eq!(
         (attr(dot, "cx"), attr(dot, "cy")),
         (Some("384"), Some("462"))
     );
-    let ring = circles.iter().find(|c| attr(c, "r") != Some("3")).unwrap();
-    assert_eq!(attr(ring, "fill"), Some("none"));
-    assert_eq!(attr(ring, "stroke"), Some(tokens.marker));
-    assert_eq!(attr(ring, "stroke-width"), Some("2"));
-    let r: f32 = attr(ring, "r").unwrap().parse().unwrap();
-    assert!((r - (width / 2.0 + 4.0)).abs() < 0.01, "{ring}");
-
-    // The pace reads away from the centre line, beyond the ring.
-    assert_pace_label(&card, Theme::Light, "spiral");
-    let label = texts(svg, FASTEST_PACE)[0];
-    let ring_x: f32 = attr(ring, "cx").unwrap().parse().unwrap();
-    let anchor = if ring_x >= 360.0 { "start" } else { "end" };
-    assert_eq!(attr(label, "text-anchor"), Some(anchor), "{label}");
 
     let squares: Vec<&str> = tags(svg, "rect")
         .into_iter()
@@ -279,30 +268,12 @@ fn trail_draws_one_round_stroke_per_kilometre_and_the_start_and_finish() {
 
     let tokens = Theme::Light.tokens();
     let circles = tags(&svg, "circle");
-    assert_eq!(circles.len(), 2, "the start and the fastest: {circles:?}");
+    assert_eq!(circles.len(), 1, "only the start: {circles:?}");
     let start = circles[0];
     assert_eq!(attr(start, "r"), Some("5"));
     assert_eq!(attr(start, "fill"), Some(tokens.paper));
     assert_eq!(attr(start, "stroke"), Some(tokens.ink));
     assert_eq!(attr(start, "stroke-width"), Some("2"));
-    // The fastest kilometre: a paper ring in the marker colour, its pace
-    // right of it, or left of it beyond x 600.
-    let ring = circles[1];
-    assert_eq!(attr(ring, "r"), Some("7"));
-    assert_eq!(attr(ring, "fill"), Some(tokens.paper));
-    assert_eq!(attr(ring, "stroke"), Some(tokens.marker));
-    assert_eq!(attr(ring, "stroke-width"), Some("2"));
-    assert_pace_label(&svg, Theme::Light, "trail");
-    let label = texts(&svg, FASTEST_PACE)[0];
-    let ring_x: f32 = attr(ring, "cx").unwrap().parse().unwrap();
-    let (offset, anchor) = if ring_x > 600.0 {
-        (-14.0, "end")
-    } else {
-        (14.0, "start")
-    };
-    let x: f32 = attr(label, "x").unwrap().parse().unwrap();
-    assert!((x - (ring_x + offset)).abs() < 0.02, "{ring} {label}");
-    assert_eq!(attr(label, "text-anchor"), Some(anchor), "{label}");
     let squares: Vec<&str> = tags(&svg, "rect")
         .into_iter()
         .filter(|r| attr(r, "width") == Some("7"))
@@ -313,26 +284,16 @@ fn trail_draws_one_round_stroke_per_kilometre_and_the_start_and_finish() {
 }
 
 #[test]
-fn dots_draws_one_numbered_circle_per_kilometre_and_rings_the_fastest() {
-    let svg = svg_of(Variant::Dots, Theme::Light);
+fn dots_draws_one_numbered_circle_per_kilometre_and_no_ring() {
+    let card = svg_of(Variant::Dots, Theme::Light);
+    let svg = picture(&card);
     let tokens = Theme::Light.tokens();
-    let circles = tags(picture(&svg), "circle");
-    assert_eq!(circles.len(), SPLITS + 1, "{svg}");
-    let rings: Vec<&&str> = circles
-        .iter()
-        .filter(|c| attr(c, "fill") == Some("none"))
-        .collect();
-    assert_eq!(rings.len(), 1, "{rings:?}");
-    assert_eq!(attr(rings[0], "stroke"), Some(tokens.marker));
-    assert_eq!(attr(rings[0], "stroke-width"), Some("2"));
-    // The pace centred under the ring, its baseline 16 px below it.
-    assert_pace_label(&svg, Theme::Light, "dots");
-    let label = texts(&svg, FASTEST_PACE)[0];
-    assert_eq!(attr(label, "text-anchor"), Some("middle"), "{label}");
-    assert_eq!(attr(label, "x"), attr(rings[0], "cx"), "{label}");
-    let number = |tag: &str, name: &str| -> f32 { attr(tag, name).unwrap().parse().unwrap() };
-    let baseline = number(rings[0], "cy") + number(rings[0], "r") + 16.0;
-    assert!((number(label, "y") - baseline).abs() < 0.02, "{label}");
+    let circles = tags(svg, "circle");
+    assert_eq!(circles.len(), SPLITS, "{svg}");
+    for circle in &circles {
+        assert_ne!(attr(circle, "fill"), Some("none"), "{circle}");
+        assert_eq!(attr(circle, "stroke"), None, "{circle}");
+    }
     let faded: Vec<&&str> = circles
         .iter()
         .filter(|c| attr(c, "opacity") == Some("0.6"))
@@ -340,16 +301,16 @@ fn dots_draws_one_numbered_circle_per_kilometre_and_rings_the_fastest() {
     assert_eq!(faded.len(), 1, "only the partial: {faded:?}");
 
     // 13 cells of 89 px: every kilometre is numbered, in muted mono 11 px,
-    // after the dots and the ring and with a paper halo, so the ring around
-    // a fast kilometre in the corner of its cell does not cross its number.
-    let ring = svg.find(r#"fill="none""#).expect("the ring");
+    // after the dots and with a paper halo, so a large dot reaching into the
+    // corner of its cell does not cross its number.
+    let last_dot = svg.rfind("<circle ").expect("the dots");
     for km in 1..=SPLITS {
         let end = svg
             .find(&format!(">{km}</text>"))
             .unwrap_or_else(|| panic!("no number {km} in {svg}"));
         let start = svg[..end].rfind("<text").unwrap();
         let tag = &svg[start..end];
-        assert!(start > ring, "number {km} is drawn before the ring");
+        assert!(start > last_dot, "number {km} is drawn before a dot");
         assert!(tag.contains(r#"font-family="JetBrains Mono""#), "{tag}");
         assert_eq!(attr(tag, "font-size"), Some("11"), "{tag}");
         assert_eq!(attr(tag, "fill"), Some(tokens.muted), "{tag}");
@@ -359,17 +320,37 @@ fn dots_draws_one_numbered_circle_per_kilometre_and_rings_the_fastest() {
 }
 
 #[test]
-fn each_variant_rings_the_fastest_kilometre_and_labels_its_pace_in_the_marker_colour() {
+fn only_the_stats_line_highlights_the_fastest_kilometre() {
     for variant in VARIANTS {
         for theme in Theme::ALL {
             let what = format!("{variant} {theme}");
             let svg = svg_of(variant, theme);
-            let marker = theme.tokens().marker;
-            let ringed = tags(picture(&svg), "circle")
-                .into_iter()
-                .any(|c| attr(c, "stroke") == Some(marker) && attr(c, "stroke-width") == Some("2"));
-            assert!(ringed, "{what}: no ring in {marker}");
-            assert_pace_label(&svg, theme, &what);
+            let accent = theme.tokens().accent;
+            // No pace beside the fastest kilometre in the picture.
+            let viz = picture(&svg);
+            assert_eq!(texts(viz, FASTEST_PACE), Vec::<&str>::new(), "{what}");
+            // Nothing in the picture is in the accent, no ring or dot, but
+            // the fastest kilometres themselves where the palette ends in it,
+            // as on dark paper.
+            let fast_end = Palette::for_theme(theme).hex(1.0);
+            let (shape, paint) = kilometre(variant);
+            for tag in painted(viz, accent) {
+                let own =
+                    tag.starts_with(&format!("<{shape} ")) && attr(tag, paint) == Some(accent);
+                assert!(fast_end == accent && own, "{what}: {tag}");
+            }
+            // The pace once at the end of the stats line in the accent, over
+            // its glowing copy on dark paper.
+            let paces = texts(&svg, FASTEST_PACE);
+            assert_eq!(paces.len(), copies(theme), "{what}: {paces:?}");
+            for tag in paces {
+                assert_eq!(
+                    (attr(tag, "x"), attr(tag, "y")),
+                    (Some("672"), Some("954")),
+                    "{what}: {tag}"
+                );
+                assert_eq!(attr(tag, "fill"), Some(accent), "{what}: {tag}");
+            }
         }
     }
 }

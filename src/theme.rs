@@ -17,8 +17,7 @@ pub enum Theme {
 
 /// The colours of a theme as CSS hex strings, e.g. `#f6f6f4`, and whether
 /// it glows: what the templates read as `theme.paper`, `theme.ink`,
-/// `theme.muted`, `theme.rule`, `theme.accent`, `theme.marker`,
-/// `theme.on_fast` and `theme.dark`.
+/// `theme.muted`, `theme.rule`, `theme.accent` and `theme.dark`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Tokens {
     /// The background.
@@ -31,11 +30,6 @@ pub struct Tokens {
     pub rule: &'static str,
     /// The fastest pace in the footer and its highlight.
     pub accent: &'static str,
-    /// The fastest-km marker and its label inside the picture: the accent on
-    /// light paper, the ink on dark, whose palette already ends in coral.
-    pub marker: &'static str,
-    /// Text set on the fastest kilometre's own colour.
-    pub on_fast: &'static str,
     /// Dark paper: the frame draws a blurred copy of the visualisation under
     /// it, so the shapes glow.
     pub dark: bool,
@@ -62,8 +56,6 @@ impl Theme {
                 muted: "#8a8d93",
                 rule: "#d9dad6",
                 accent: "#e2492a",
-                marker: "#e2492a",
-                on_fast: "#17191d",
                 dark: false,
             },
             Self::Dark => Tokens {
@@ -72,8 +64,6 @@ impl Theme {
                 muted: "#7d8590",
                 rule: "#262b33",
                 accent: "#ff5a36",
-                marker: "#f4efe6",
-                on_fast: "#0f1115",
                 dark: true,
             },
         }
@@ -141,8 +131,6 @@ mod tests {
                 muted: "#8a8d93",
                 rule: "#d9dad6",
                 accent: "#e2492a",
-                marker: "#e2492a",
-                on_fast: "#17191d",
                 dark: false,
             }
         );
@@ -158,19 +146,8 @@ mod tests {
                 muted: "#7d8590",
                 rule: "#262b33",
                 accent: "#ff5a36",
-                marker: "#f4efe6",
-                on_fast: "#0f1115",
                 dark: true,
             }
         );
-    }
-
-    #[test]
-    fn the_dark_marker_is_the_cream_ink_since_the_fast_end_of_its_palette_is_coral() {
-        let dark = Theme::Dark.tokens();
-        assert_eq!(dark.marker, dark.ink);
-        assert_ne!(dark.marker, dark.accent);
-        let light = Theme::Light.tokens();
-        assert_eq!(light.marker, light.accent);
     }
 }

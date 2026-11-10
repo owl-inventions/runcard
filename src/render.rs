@@ -191,8 +191,6 @@ fn theme_value(theme: &Tokens) -> Value {
         muted => theme.muted,
         rule => theme.rule,
         accent => theme.accent,
-        marker => theme.marker,
-        on_fast => theme.on_fast,
         dark => theme.dark,
     }
 }
@@ -1011,8 +1009,6 @@ mod tests {
                 muted: "#070809",
                 rule: "#0a0b0c",
                 accent: "#101112",
-                marker: "#131415",
-                on_fast: "#161718",
                 dark,
             };
             let data = CardData {
@@ -1097,8 +1093,6 @@ mod tests {
             ("muted", "#7d8590"),
             ("rule", "#262b33"),
             ("accent", "#ff5a36"),
-            ("marker", "#f4efe6"),
-            ("on_fast", "#0f1115"),
         ] {
             assert_eq!(attr(&theme, key).as_str(), Some(colour), "theme.{key}");
         }

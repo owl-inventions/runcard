@@ -15,7 +15,7 @@ use crate::model::{Analysis, Meta, SplitView};
 use crate::palette::Palette;
 use crate::render::px;
 use crate::route;
-use crate::text::{Role, TextMeasure};
+use crate::text::TextMeasure;
 
 /// Centre of the spiral, the middle of the visualisation zone x 48 to 672,
 /// y 200 to 724.
@@ -46,20 +46,6 @@ const MAX_STROKE: f64 = 16.0;
 const MIN_GROWTH: f64 = MIN_STROKE / (STROKE_SHARE * TAU);
 /// Bisection steps when searching the growth.
 const BISECTION_STEPS: usize = 40;
-/// Paper between the stroke of the fastest kilometre and its ring.
-const RING_CLEARANCE: f32 = 4.0;
-/// The pace beside the ring: Mono at 12 px, placed 10 px beyond the ring,
-/// its baseline 4.5 px below that point so the figures centre on it.
-const LABEL_SIZE: f32 = 12.0;
-const LABEL_GAP: f32 = 10.0;
-const LABEL_DROP: f32 = 4.5;
-/// Height of the figures of JetBrains Mono at 12 px (cap height 0.73 em).
-const FIGURE_HEIGHT: f32 = 8.76;
-/// The zone the picture, the pace included, stays in.
-const ZONE_LEFT: f32 = 48.0;
-const ZONE_RIGHT: f32 = 672.0;
-const ZONE_TOP: f32 = 200.0;
-const ZONE_BOTTOM: f32 = 724.0;
 
 /// One kilometre of the spiral.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -70,33 +56,6 @@ pub struct Segment {
     pub path: String,
     /// CSS colour of the kilometre's pace.
     pub color: String,
-}
-
-/// A circle drawn as an outline.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub struct Ring {
-    pub x: f32,
-    pub y: f32,
-    pub r: f32,
-}
-
-/// A text placed by its anchor on the baseline.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Label {
-    pub x: f32,
-    /// The baseline.
-    pub y: f32,
-    /// The SVG `text-anchor`, `start` or `end`.
-    pub anchor: &'static str,
-    pub text: String,
-}
-
-/// The fastest full kilometre: a ring around its middle and its pace beside it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Callout {
-    pub ring: Ring,
-    /// The pace, e.g. `4:48`.
-    pub label: Label,
 }
 
 /// What `templates/spiral.svg` draws inside the visualisation zone.
@@ -110,17 +69,15 @@ pub struct Spiral {
     pub start: Option<(f32, f32)>,
     /// Centre of the finish square, the last point of the spiral.
     pub finish: Option<(f32, f32)>,
-    /// The ring around the middle of the fastest full kilometre and its pace.
-    pub fastest: Option<Callout>,
 }
 
 /// Lays out the spiral in card pixels: one segment per split in its colour,
-/// the start and finish markers and the callout of the fastest kilometre.
+/// and the start and finish markers.
 pub fn build(
-    analysis: &Analysis,
+    _analysis: &Analysis,
     splits: &[SplitView],
     _palette: &Palette,
-    measure: &TextMeasure,
+    _measure: &TextMeasure,
     _meta: &Meta,
 ) -> Spiral {
     let fractions: Vec<f64> = splits.iter().map(|s| f64::from(s.fraction)).collect();
@@ -130,7 +87,6 @@ pub fn build(
             stroke_width: 0.0,
             start: None,
             finish: None,
-            fastest: None,
         };
     };
     let card = |(x, y): (f64, f64)| (x as f32, y as f32);
@@ -147,23 +103,6 @@ pub fn build(
             }
         })
         .collect();
-    let fastest = analysis
-        .fastest
-        .and_then(|index| splits.iter().position(|s| s.index == index))
-        .map(|i| {
-            let (x, y) = card(coil.middles[i]);
-            let ring = Ring {
-                x,
-                y,
-                r: coil.width / 2.0 + RING_CLEARANCE,
-            };
-            let pace = &splits[i].pace;
-            let width = measure.width(Role::Mono, pace, LABEL_SIZE);
-            Callout {
-                ring,
-                label: label(ring, pace.clone(), width),
-            }
-        });
     Spiral {
         segments,
         stroke_width: coil.width,
@@ -179,33 +118,7 @@ pub fn build(
             .and_then(|line| line.last())
             .copied()
             .map(card),
-        fastest,
     }
-}
-
-/// The pace `text`, `width` px wide, beside the fastest kilometre's `ring`,
-/// [`LABEL_GAP`] px beyond the ring on the radius through its centre:
-/// outward, or inward where outward its figures would leave the zone at the
-/// top or bottom. It reads away from the centre line, anchored at its start
-/// from x 360 rightward, at its end left of it. A pace that would cross a
-/// side of the zone is moved along its baseline until it ends on that side.
-fn label(ring: Ring, text: String, width: f32) -> Label {
-    let (cx, cy) = (CENTRE.0 as f32, CENTRE.1 as f32);
-    let (dx, dy) = (ring.x - cx, ring.y - cy);
-    let reach = (ring.r + LABEL_GAP) / dx.hypot(dy);
-    let at = |side: f32| {
-        (
-            ring.x + side * dx * reach,
-            ring.y + side * dy * reach + LABEL_DROP,
-        )
-    };
-    let (x, y) = Some(at(1.0))
-        .filter(|&(_, y)| y - FIGURE_HEIGHT >= ZONE_TOP && y <= ZONE_BOTTOM)
-        .unwrap_or_else(|| at(-1.0));
-    let anchor = if ring.x >= cx { "start" } else { "end" };
-    let left = if anchor == "end" { x - width } else { x };
-    let x = x + left.clamp(ZONE_LEFT, ZONE_RIGHT - width) - left;
-    Label { x, y, anchor, text }
 }
 
 /// The spiral of a run, before it is turned into path data.
@@ -219,8 +132,6 @@ struct Coil {
     arcs: Vec<f64>,
     /// The polyline of each split, the gaps between them cut away.
     lines: Vec<Vec<(f64, f64)>>,
-    /// The point halfway along each split's share of the arc.
-    middles: Vec<(f64, f64)>,
 }
 
 /// The spiral for splits of these `fractions` of a kilometre; none without
@@ -253,16 +164,11 @@ fn coil(fractions: &[f64]) -> Option<Coil> {
             sample(growth, from, to)
         })
         .collect();
-    let middles = arcs
-        .windows(2)
-        .map(|pair| point(growth, table.angle_at((pair[0] + pair[1]) / 2.0)))
-        .collect();
     Some(Coil {
         growth,
         width: stroke_width(growth),
         arcs,
         lines,
-        middles,
     })
 }
 
@@ -402,20 +308,6 @@ impl Spiral {
             finish => self
                 .finish
                 .map(|(x, y)| context! { x => px(x - FINISH_HALF), y => px(y - FINISH_HALF) }),
-            fastest => self.fastest.as_ref().map(|callout| {
-                let (ring, label) = (callout.ring, &callout.label);
-                context! {
-                    x => px(ring.x),
-                    y => px(ring.y),
-                    r => px(ring.r),
-                    label => context! {
-                        x => px(label.x),
-                        y => px(label.y),
-                        anchor => label.anchor,
-                        text => &label.text,
-                    },
-                }
-            }),
         }
     }
 }
@@ -429,7 +321,6 @@ mod tests {
     use std::f64::consts::TAU;
 
     use crate::model::Split;
-    use crate::text::Role;
     use crate::theme::Theme;
 
     const CENTRE: (f64, f64) = (360.0, 462.0);
@@ -523,7 +414,6 @@ mod tests {
         for fractions in runs() {
             let coil = coil_of(&fractions);
             assert_eq!(coil.lines.len(), fractions.len());
-            assert_eq!(coil.middles.len(), fractions.len());
             assert_eq!(coil.arcs.len(), fractions.len() + 1);
             assert!(coil.lines.iter().all(|line| line.len() >= 2));
         }
@@ -639,24 +529,6 @@ mod tests {
     }
 
     #[test]
-    fn the_middle_of_a_split_is_halfway_along_its_share() {
-        let coil = coil_of(&fractions(10, 0.0));
-        for (i, &middle) in coil.middles.iter().enumerate() {
-            let line = &coil.lines[i];
-            let (before, after) = (line[0], *line.last().unwrap());
-            assert!(radius(middle) >= radius(before) && radius(middle) <= radius(after));
-        }
-        // On the steepest spiral the radius grows evenly with the angle, and
-        // the middle of km 1 lies where the arc is half that of km 1.
-        let short = coil_of(&fractions(2, 0.0));
-        let target = short.arcs[1] / 2.0;
-        // The angle from the radius: km 1 winds past a full turn.
-        let middle_angle = (radius(short.middles[0]) - 24.0) / 12.0;
-        let along = exact_length(12.0, middle_angle);
-        assert!((along - target).abs() < 0.5, "{along} vs {target}");
-    }
-
-    #[test]
     fn no_splits_make_no_coil() {
         assert_eq!(coil(&[]), None);
     }
@@ -674,7 +546,7 @@ mod tests {
         }
     }
 
-    fn analysis(views: &[SplitView], fastest: Option<u32>) -> Analysis {
+    fn analysis(views: &[SplitView]) -> Analysis {
         let splits: Vec<Split> = views
             .iter()
             .map(|v| Split {
@@ -688,7 +560,7 @@ mod tests {
             distance_m: splits.iter().map(|s| s.distance_m).sum(),
             elapsed_s: splits.iter().map(|s| s.seconds).sum(),
             splits,
-            fastest,
+            fastest: None,
             start: None,
             points: Vec::new(),
         }
@@ -703,9 +575,9 @@ mod tests {
         }
     }
 
-    fn spiral_of(views: &[SplitView], fastest: Option<u32>) -> Spiral {
+    fn spiral_of(views: &[SplitView]) -> Spiral {
         build(
-            &analysis(views, fastest),
+            &analysis(views),
             views,
             &Palette::for_theme(Theme::Light),
             &TextMeasure::new(),
@@ -729,7 +601,7 @@ mod tests {
     #[test]
     fn every_split_gets_a_segment_in_its_colour_from_its_line() {
         let views = ten_k();
-        let spiral = spiral_of(&views, Some(4));
+        let spiral = spiral_of(&views);
         let coil = coil_of(&fractions(10, f64::from(0.4_f32)));
         assert_eq!(spiral.segments.len(), 11);
         for ((segment, view), line) in spiral.segments.iter().zip(&views).zip(&coil.lines) {
@@ -747,7 +619,7 @@ mod tests {
 
     #[test]
     fn the_start_dot_and_the_finish_square_sit_on_the_ends_of_the_spiral() {
-        let spiral = spiral_of(&ten_k(), Some(4));
+        let spiral = spiral_of(&ten_k());
         let coil = coil_of(&fractions(10, f64::from(0.4_f32)));
         assert_eq!(spiral.start, Some((384.0, 462.0)));
         let (x, y) = *coil.lines[10].last().unwrap();
@@ -755,106 +627,10 @@ mod tests {
     }
 
     #[test]
-    fn the_fastest_kilometre_gets_a_ring_around_its_middle_and_its_pace_beside_it() {
-        let mut views = ten_k();
-        views[3].pace = "4:48".into();
-        let spiral = spiral_of(&views, Some(4));
-        let coil = coil_of(&fractions(10, f64::from(0.4_f32)));
-        let (x, y) = coil.middles[3];
-        let callout = spiral.fastest.expect("a callout");
-        let ring = ring_at(x as f32, y as f32, coil.width / 2.0 + 4.0);
-        assert_eq!(callout.ring, ring);
-        let width = TextMeasure::new().width(Role::Mono, "4:48", 12.0);
-        assert_eq!(callout.label, label(ring, "4:48".into(), width));
-        assert_eq!(callout.label.text, "4:48");
-        assert_eq!(spiral_of(&ten_k(), None).fastest, None);
-    }
-
-    // ----- the callout -----
-
-    fn ring_at(x: f32, y: f32, r: f32) -> Ring {
-        Ring { x, y, r }
-    }
-
-    fn assert_label(label: &Label, x: f32, y: f32, anchor: &str) {
-        assert!(
-            (label.x - x).abs() < 1e-3 && (label.y - y).abs() < 1e-3 && label.anchor == anchor,
-            "{label:?}, expected {x} {y} {anchor}"
-        );
-    }
-
-    #[test]
-    fn the_pace_sits_outward_along_the_radius_10_px_beyond_the_ring() {
-        // Right of the centre: anchored at its start, the baseline 4.5 px down.
-        let right = label(ring_at(500.0, 462.0, 12.0), "4:48".into(), 29.0);
-        assert_label(&right, 522.0, 466.5, "start");
-        assert_eq!(right.text, "4:48");
-        // Left of it: anchored at its end.
-        let left = label(ring_at(200.0, 462.0, 12.0), "4:48".into(), 29.0);
-        assert_label(&left, 178.0, 466.5, "end");
-        // Down and right: 20 px on along the radius through the ring's centre.
-        let diagonal = label(ring_at(420.0, 542.0, 10.0), "4:48".into(), 29.0);
-        assert_label(&diagonal, 432.0, 562.5, "start");
-        // On the centre line: anchored at its start.
-        let below = label(ring_at(360.0, 600.0, 10.0), "4:48".into(), 29.0);
-        assert_label(&below, 360.0, 624.5, "start");
-    }
-
-    #[test]
-    fn a_pace_that_would_leave_the_zone_at_the_top_or_bottom_goes_inward() {
-        // Outward, the figures would start at y 185.74, above the zone.
-        let top = label(ring_at(360.0, 212.0, 12.0), "4:48".into(), 29.0);
-        assert_label(&top, 360.0, 238.5, "start");
-        // Outward, the baseline would be at y 738.5, below the zone.
-        let bottom = label(ring_at(300.0, 712.0, 12.0), "4:48".into(), 29.0);
-        let (dx, dy) = (-60.0_f32, 250.0_f32);
-        let along = 22.0 / dx.hypot(dy);
-        assert_label(&bottom, 300.0 - dx * along, 712.0 - dy * along + 4.5, "end");
-        // Just inside: outward.
-        let inside = label(ring_at(360.0, 240.0, 12.0), "4:48".into(), 29.0);
-        assert_label(&inside, 360.0, 222.5, "start");
-    }
-
-    #[test]
-    fn a_pace_that_would_leave_the_zone_at_a_side_ends_on_its_edge() {
-        // From x 662 it would end at 691: moved left to end at 672.
-        let right = label(ring_at(640.0, 462.0, 12.0), "4:48".into(), 29.0);
-        assert_label(&right, 643.0, 466.5, "start");
-        // Ending at x 58 it would start at 29: moved right to start at 48.
-        let left = label(ring_at(80.0, 462.0, 12.0), "4:48".into(), 29.0);
-        assert_label(&left, 77.0, 466.5, "end");
-    }
-
-    #[test]
-    fn every_pace_stays_inside_the_zone_wherever_the_fastest_kilometre_is() {
-        let width = TextMeasure::new().width(Role::Mono, "10:48", 12.0);
-        for fractions in runs() {
-            let coil = coil_of(&fractions);
-            for &(x, y) in &coil.middles {
-                let ring = ring_at(x as f32, y as f32, coil.width / 2.0 + 4.0);
-                let label = label(ring, "10:48".into(), width);
-                let left = if label.anchor == "end" {
-                    label.x - width
-                } else {
-                    label.x
-                };
-                assert!(left >= 48.0 - 1e-3, "{label:?}");
-                assert!(left + width <= 672.0 + 1e-3, "{label:?}");
-                // The figures are 8.76 px tall at 12 px.
-                assert!(label.y - 8.76 >= 200.0 - 1e-3, "{label:?}");
-                assert!(label.y <= 724.0 + 1e-3, "{label:?}");
-            }
-        }
-    }
-
-    #[test]
     fn without_splits_the_spiral_is_empty() {
-        let spiral = spiral_of(&[], None);
+        let spiral = spiral_of(&[]);
         assert!(spiral.segments.is_empty());
-        assert_eq!(
-            (spiral.start, spiral.finish, spiral.fastest),
-            (None, None, None)
-        );
+        assert_eq!((spiral.start, spiral.finish), (None, None));
     }
 
     #[test]
@@ -868,15 +644,6 @@ mod tests {
             stroke_width: 12.3,
             start: Some((384.0, 462.0)),
             finish: Some((100.123_45, 200.987_65)),
-            fastest: Some(Callout {
-                ring: ring_at(1.234_5, 2.345_6, 10.000_1),
-                label: Label {
-                    x: 23.456_7,
-                    y: 6.845_6,
-                    anchor: "end",
-                    text: "4:48".into(),
-                },
-            }),
         };
         let value = spiral.to_value();
         let get = |path: &str| {
@@ -891,13 +658,6 @@ mod tests {
         // The square is 6 px wide, centred on the finish.
         assert_eq!(get("finish.x"), "97.12");
         assert_eq!(get("finish.y"), "197.99");
-        assert_eq!(get("fastest.x"), "1.23");
-        assert_eq!(get("fastest.y"), "2.35");
-        assert_eq!(get("fastest.r"), "10");
-        assert_eq!(get("fastest.label.x"), "23.46");
-        assert_eq!(get("fastest.label.y"), "6.85");
-        assert_eq!(get("fastest.label.anchor"), "end");
-        assert_eq!(get("fastest.label.text"), "4:48");
         let segment = value
             .get_attr("segments")
             .unwrap()
@@ -913,8 +673,8 @@ mod tests {
 
     #[test]
     fn an_empty_spiral_has_no_markers_in_its_value() {
-        let value = spiral_of(&[], None).to_value();
-        for key in ["start", "finish", "fastest"] {
+        let value = spiral_of(&[]).to_value();
+        for key in ["start", "finish"] {
             assert!(value.get_attr(key).unwrap().is_none(), "{key}");
         }
     }

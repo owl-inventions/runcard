@@ -10,12 +10,5 @@
 {%- if spiral.finish %}
     <rect x="{{ spiral.finish.x }}" y="{{ spiral.finish.y }}" width="6" height="6" fill="{{ theme.ink }}"/>
 {%- endif %}
-{#- The fastest kilometre: a ring in the marker colour and its pace,
-    haloed in paper where it crosses the next turn. #}
-{%- if spiral.fastest %}
-{%- set fastest = spiral.fastest %}
-    <circle cx="{{ fastest.x }}" cy="{{ fastest.y }}" r="{{ fastest.r }}" fill="none" stroke="{{ theme.marker }}" stroke-width="2"/>
-    <text x="{{ fastest.label.x }}" y="{{ fastest.label.y }}" text-anchor="{{ fastest.label.anchor }}" {{ font.mono }} font-size="12" fill="{{ theme.marker }}" stroke="{{ theme.paper }}" stroke-width="3" stroke-linejoin="round" paint-order="stroke">{{ fastest.label.text }}</text>
-{%- endif %}
 {%- endif %}
 {% endblock %}

@@ -10,12 +10,5 @@
 {%- endfor %}
 {#- The label goes over the curve; on a paper halo when the curve runs through it. #}
     <text x="{{ wave.label.x }}" y="{{ wave.label.y }}" text-anchor="end" {{ font.label }} font-size="11" fill="{{ theme.muted }}"{% if wave.label.halo %} stroke="{{ theme.paper }}" stroke-width="4" stroke-linejoin="round" paint-order="stroke"{% endif %}>average</text>
-{#- The fastest kilometre: a dot in the marker colour and its pace. #}
-{%- if wave.fastest %}
-{%- set dot = wave.fastest.dot %}
-{%- set label = wave.fastest.label %}
-    <circle cx="{{ dot.x }}" cy="{{ dot.y }}" r="5" fill="{{ theme.marker }}"/>
-    <text x="{{ label.x }}" y="{{ label.y }}" text-anchor="{{ label.anchor }}" {{ font.mono }} font-size="12" fill="{{ theme.marker }}">{{ label.pace }}</text>
-{%- endif %}
 {%- endif %}
 {% endblock %}
