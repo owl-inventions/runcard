@@ -4,13 +4,14 @@
 {%- for rule in ledger.rules %}
     <rect x="{{ rule.x }}" y="{{ rule.y }}" width="{{ rule.width }}" height="1" fill="{{ theme.rule }}"/>
 {%- endfor %}
+{#- The fastest kilometre's number and pace in the marker colour, the pace bold. #}
 {%- for row in ledger.rows %}
-    <text x="{{ row.x }}" y="{{ row.baseline }}" {{ font.mono }} font-size="13" fill="{{ theme.muted }}">{{ row.index }}</text>
+    <text x="{{ row.x }}" y="{{ row.baseline }}" {{ font.mono }} font-size="13" fill="{{ theme.marker if row.fastest else theme.muted }}">{{ row.index }}</text>
 {%- if row.note %}
     <text x="{{ row.note.x }}" y="{{ row.baseline }}" {{ font.mono }} font-size="11" fill="{{ theme.muted }}">{{ row.note.text }}</text>
 {%- endif %}
     <rect x="{{ row.swatch.x }}" y="{{ row.swatch.y }}" width="10" height="10" rx="3" fill="{{ row.color }}"{% if row.swatch.opacity %} opacity="{{ row.swatch.opacity }}"{% endif %}/>
-    <text x="{{ row.right }}" y="{{ row.baseline }}" text-anchor="end" {% if row.weight == 700 %}font-family="JetBrains Mono" font-variation-settings="'wght' 700"{% else %}{{ font.mono }}{% endif %} font-size="13" fill="{{ theme.ink }}">{{ row.pace }}</text>
+    <text x="{{ row.right }}" y="{{ row.baseline }}" text-anchor="end" {% if row.fastest %}font-family="JetBrains Mono" font-variation-settings="'wght' 700"{% else %}{{ font.mono }}{% endif %} font-size="13" fill="{{ theme.marker if row.fastest else theme.ink }}">{{ row.pace }}</text>
 {%- endfor %}
 {%- endif %}
 {% endblock %}

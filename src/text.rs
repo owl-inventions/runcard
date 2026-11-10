@@ -4,31 +4,59 @@
 use skrifa::instance::{Location, Size};
 use skrifa::{FontRef, MetadataProvider};
 
-/// The two typefaces of the card, both variable fonts bundled into the binary.
+/// The four font files bundled into the binary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Face {
-    /// Archivo, axes `wdth` 62..125 and `wght` 100..900: every text of the frame.
-    Archivo,
-    /// JetBrains Mono, axis `wght` 100..800: figures inside the visualisations.
+    /// Instrument Serif, static: the title.
+    InstrumentSerif,
+    /// Instrument Serif Italic, static: the last word of the title and the byline.
+    InstrumentSerifItalic,
+    /// Bricolage Grotesque, axes `opsz` 12..96, `wdth` 75..100 and `wght`
+    /// 200..800: the time, the labels and the stats.
+    Bricolage,
+    /// JetBrains Mono, axis `wght` 100..800: figures inside the pictures.
     JetBrainsMono,
 }
 
-impl Face {
-    /// Both faces, in the order of [`TextMeasure`]'s fonts.
-    pub const ALL: [Face; 2] = [Face::Archivo, Face::JetBrainsMono];
+/// Whether a face is upright or italic, as `font-style` selects it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Style {
+    Normal,
+    Italic,
+}
 
-    /// The family name the templates and fontdb know the face by.
+impl Face {
+    /// Every face, in the order of [`TextMeasure`]'s fonts.
+    pub const ALL: [Face; 4] = [
+        Face::InstrumentSerif,
+        Face::InstrumentSerifItalic,
+        Face::Bricolage,
+        Face::JetBrainsMono,
+    ];
+
+    /// The family name the templates and fontdb know the face by; both
+    /// serif faces share theirs.
     pub fn family(self) -> &'static str {
         match self {
-            Face::Archivo => "Archivo",
+            Face::InstrumentSerif | Face::InstrumentSerifItalic => "Instrument Serif",
+            Face::Bricolage => "Bricolage Grotesque",
             Face::JetBrainsMono => "JetBrains Mono",
         }
     }
 
-    /// The variation axes the roles set on this face.
+    /// The style that selects this face within its family.
+    pub fn style(self) -> Style {
+        match self {
+            Face::InstrumentSerifItalic => Style::Italic,
+            _ => Style::Normal,
+        }
+    }
+
+    /// The variation axes of the face, each of which its roles set.
     pub fn axes(self) -> &'static [&'static str] {
         match self {
-            Face::Archivo => &["wdth", "wght"],
+            Face::InstrumentSerif | Face::InstrumentSerifItalic => &[],
+            Face::Bricolage => &["opsz", "wdth", "wght"],
             Face::JetBrainsMono => &["wght"],
         }
     }
@@ -36,7 +64,9 @@ impl Face {
     /// The font file, included once for both measuring and rendering.
     pub(crate) fn data(self) -> &'static [u8] {
         match self {
-            Face::Archivo => include_bytes!("../fonts/Archivo-Variable.ttf"),
+            Face::InstrumentSerif => include_bytes!("../fonts/InstrumentSerif-Regular.ttf"),
+            Face::InstrumentSerifItalic => include_bytes!("../fonts/InstrumentSerif-Italic.ttf"),
+            Face::Bricolage => include_bytes!("../fonts/BricolageGrotesque-Variable.ttf"),
             Face::JetBrainsMono => include_bytes!("../fonts/JetBrainsMono-Variable.ttf"),
         }
     }
@@ -45,97 +75,86 @@ impl Face {
 /// A type role of the card: a face at one fixed point of its design space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
-    /// The event title: Archivo semi-expanded, semibold.
+    /// The title: Instrument Serif.
     Display,
-    /// The big finish time: Archivo condensed, medium.
+    /// The last word of the title and the runner's byline: Instrument Serif Italic.
+    DisplayItalic,
+    /// The finish time: Bricolage at its display size, condensed, extra bold.
     Numeral,
-    /// Small labels and the line under the title: Archivo, medium.
+    /// The subline and the legend captions: Bricolage at its smallest size, medium.
     Label,
-    /// The runner's name: Archivo, semibold.
-    Name,
-    /// The values in the footer: Archivo, regular.
+    /// The stats line: Bricolage at text size, semibold.
     Text,
-    /// Kilometre numbers and paces inside the visualisations: JetBrains Mono, medium.
+    /// The fastest pace in the stats line: Bricolage at text size, extra bold.
+    Strong,
+    /// Figures inside the pictures: JetBrains Mono, medium.
     Mono,
 }
 
 impl Role {
     /// Every role, in the order of the design system.
-    pub const ALL: [Role; 6] = [
+    pub const ALL: [Role; 7] = [
         Role::Display,
+        Role::DisplayItalic,
         Role::Numeral,
         Role::Label,
-        Role::Name,
         Role::Text,
+        Role::Strong,
         Role::Mono,
     ];
 
     pub fn face(self) -> Face {
         match self {
+            Role::Display => Face::InstrumentSerif,
+            Role::DisplayItalic => Face::InstrumentSerifItalic,
+            Role::Numeral | Role::Label | Role::Text | Role::Strong => Face::Bricolage,
             Role::Mono => Face::JetBrainsMono,
-            _ => Face::Archivo,
         }
     }
 
-    /// The `wdth` coordinate, 100 for the normal width.
-    pub fn wdth(self) -> f32 {
+    /// The role's coordinates on every axis its face has, e.g.
+    /// `[("opsz", 96), ("wdth", 75), ("wght", 800)]`; none for a static face.
+    pub fn coordinates(self) -> &'static [(&'static str, f32)] {
         match self {
-            Role::Display => 112.0,
-            Role::Numeral => 85.0,
-            Role::Label | Role::Name | Role::Text | Role::Mono => 100.0,
+            Role::Display | Role::DisplayItalic => &[],
+            Role::Numeral => &[("opsz", 96.0), ("wdth", 75.0), ("wght", 800.0)],
+            Role::Label => &[("opsz", 12.0), ("wdth", 100.0), ("wght", 500.0)],
+            Role::Text => &[("opsz", 14.0), ("wdth", 100.0), ("wght", 600.0)],
+            Role::Strong => &[("opsz", 14.0), ("wdth", 100.0), ("wght", 800.0)],
+            Role::Mono => &[("wght", 500.0)],
         }
-    }
-
-    /// The `wght` coordinate.
-    pub fn wght(self) -> f32 {
-        match self {
-            Role::Display | Role::Name => 600.0,
-            Role::Text => 400.0,
-            Role::Numeral | Role::Label | Role::Mono => 500.0,
-        }
-    }
-
-    /// The role's coordinates on the axes its face has, e.g. `[("wdth", 112),
-    /// ("wght", 600)]`.
-    pub fn coordinates(self) -> Vec<(&'static str, f32)> {
-        self.face()
-            .axes()
-            .iter()
-            .map(|&axis| {
-                (
-                    axis,
-                    if axis == "wdth" {
-                        self.wdth()
-                    } else {
-                        self.wght()
-                    },
-                )
-            })
-            .collect()
     }
 
     /// The SVG attributes that set a text in this role, e.g.
-    /// `font-family="Archivo" font-variation-settings="'wdth' 112, 'wght' 600"`.
+    /// `font-family="Instrument Serif" font-style="italic"` or
+    /// `font-family="JetBrains Mono" font-variation-settings="'wght' 500"`.
     /// The axes are set explicitly, so resvg renders exactly the measured
     /// instance; without `font-variation-settings` it would derive them from
-    /// `font-weight` and the `font-stretch` keywords.
+    /// `font-weight`, the `font-stretch` keywords and the font size.
     pub fn attributes(self) -> String {
-        let settings: Vec<String> = self
-            .coordinates()
-            .iter()
-            .map(|(axis, value)| format!("'{axis}' {value}"))
-            .collect();
-        format!(
-            r#"font-family="{}" font-variation-settings="{}""#,
-            self.face().family(),
-            settings.join(", ")
-        )
+        let face = self.face();
+        let mut attributes = format!(r#"font-family="{}""#, face.family());
+        if face.style() == Style::Italic {
+            attributes.push_str(r#" font-style="italic""#);
+        }
+        if !self.coordinates().is_empty() {
+            let settings: Vec<String> = self
+                .coordinates()
+                .iter()
+                .map(|(axis, value)| format!("'{axis}' {value}"))
+                .collect();
+            attributes.push_str(&format!(
+                r#" font-variation-settings="{}""#,
+                settings.join(", ")
+            ));
+        }
+        attributes
     }
 }
 
 /// Horizontal text metrics of the bundled faces.
 pub struct TextMeasure {
-    fonts: [FontRef<'static>; 2],
+    fonts: [FontRef<'static>; 4],
 }
 
 impl TextMeasure {
@@ -147,16 +166,11 @@ impl TextMeasure {
     }
 
     /// Width in pixels of `text` set in `role` at `size` px: the sum of the
-    /// glyph advances at the role's coordinates, a character without a glyph
-    /// counting as the font's average advance.
-    ///
-    /// Like resvg (CSS `font-optical-sizing: auto`), an `opsz` axis would be
-    /// set to `size`; skrifa ignores it for the bundled faces, which have none.
+    /// glyph advances at exactly the role's coordinates, a character without
+    /// a glyph counting as the font's average advance.
     pub fn width(&self, role: Role, text: &str, size: f32) -> f32 {
         let font = &self.fonts[role.face() as usize];
-        let location: Location = font
-            .axes()
-            .location(role.coordinates().into_iter().chain([("opsz", size)]));
+        let location: Location = font.axes().location(role.coordinates().iter().copied());
         let metrics = font.metrics(Size::unscaled(), &location);
         let advances = font.glyph_metrics(Size::unscaled(), &location);
         let charmap = font.charmap();
@@ -173,6 +187,14 @@ impl TextMeasure {
             .sum();
         units * size / units_per_em
     }
+
+    /// [`width`](Self::width) of a tracked text: `letter_spacing` px between
+    /// every two characters. resvg also adds it after the last one, which
+    /// leaves no ink, so a right-aligned tracked text ends that much early.
+    pub fn width_spaced(&self, role: Role, text: &str, size: f32, letter_spacing: f32) -> f32 {
+        let gaps = text.chars().count().saturating_sub(1);
+        self.width(role, text, size) + letter_spacing * gaps as f32
+    }
 }
 
 impl Default for TextMeasure {
@@ -180,7 +202,6 @@ impl Default for TextMeasure {
         Self::new()
     }
 }
-
 /// The mark that ends a cut text.
 pub const ELLIPSIS: char = '\u{2026}';
 
@@ -263,37 +284,113 @@ mod tests {
     }
 
     #[test]
-    fn every_role_has_the_face_width_and_weight_of_the_design() {
-        let roles: Vec<(Role, Face, f32, f32)> = Role::ALL
+    fn the_faces_are_the_four_bundled_files_the_serifs_sharing_a_family() {
+        let faces: Vec<(Face, &str, Style, &[&str])> = Face::ALL
             .iter()
-            .map(|&role| (role, role.face(), role.wdth(), role.wght()))
+            .map(|&face| (face, face.family(), face.style(), face.axes()))
             .collect();
         assert_eq!(
-            roles,
+            faces,
             [
-                (Role::Display, Face::Archivo, 112.0, 600.0),
-                (Role::Numeral, Face::Archivo, 85.0, 500.0),
-                (Role::Label, Face::Archivo, 100.0, 500.0),
-                (Role::Name, Face::Archivo, 100.0, 600.0),
-                (Role::Text, Face::Archivo, 100.0, 400.0),
-                (Role::Mono, Face::JetBrainsMono, 100.0, 500.0),
+                (
+                    Face::InstrumentSerif,
+                    "Instrument Serif",
+                    Style::Normal,
+                    &[][..]
+                ),
+                (
+                    Face::InstrumentSerifItalic,
+                    "Instrument Serif",
+                    Style::Italic,
+                    &[][..]
+                ),
+                (
+                    Face::Bricolage,
+                    "Bricolage Grotesque",
+                    Style::Normal,
+                    &["opsz", "wdth", "wght"][..]
+                ),
+                (
+                    Face::JetBrainsMono,
+                    "JetBrains Mono",
+                    Style::Normal,
+                    &["wght"][..]
+                ),
             ]
         );
     }
 
     #[test]
-    fn a_role_sets_its_family_and_every_axis_its_face_has() {
+    fn every_role_has_the_face_and_coordinates_of_the_design() {
+        /// A role, its face and its coordinates.
+        type Design = (Role, Face, &'static [(&'static str, f32)]);
+        let roles: Vec<Design> = Role::ALL
+            .iter()
+            .map(|&role| (role, role.face(), role.coordinates()))
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                (Role::Display, Face::InstrumentSerif, &[][..]),
+                (Role::DisplayItalic, Face::InstrumentSerifItalic, &[][..]),
+                (
+                    Role::Numeral,
+                    Face::Bricolage,
+                    &[("opsz", 96.0), ("wdth", 75.0), ("wght", 800.0)][..]
+                ),
+                (
+                    Role::Label,
+                    Face::Bricolage,
+                    &[("opsz", 12.0), ("wdth", 100.0), ("wght", 500.0)][..]
+                ),
+                (
+                    Role::Text,
+                    Face::Bricolage,
+                    &[("opsz", 14.0), ("wdth", 100.0), ("wght", 600.0)][..]
+                ),
+                (
+                    Role::Strong,
+                    Face::Bricolage,
+                    &[("opsz", 14.0), ("wdth", 100.0), ("wght", 800.0)][..]
+                ),
+                (Role::Mono, Face::JetBrainsMono, &[("wght", 500.0)][..]),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_role_sets_each_axis_of_its_face() {
+        for role in Role::ALL {
+            let axes: Vec<&str> = role.coordinates().iter().map(|&(axis, _)| axis).collect();
+            assert_eq!(axes, role.face().axes(), "{role:?}");
+        }
+    }
+
+    #[test]
+    fn a_role_sets_its_family_its_style_and_its_axes() {
         assert_eq!(
             Role::Display.attributes(),
-            r#"font-family="Archivo" font-variation-settings="'wdth' 112, 'wght' 600""#
+            r#"font-family="Instrument Serif""#
+        );
+        assert_eq!(
+            Role::DisplayItalic.attributes(),
+            r#"font-family="Instrument Serif" font-style="italic""#
         );
         assert_eq!(
             Role::Numeral.attributes(),
-            r#"font-family="Archivo" font-variation-settings="'wdth' 85, 'wght' 500""#
+            r#"font-family="Bricolage Grotesque" font-variation-settings="'opsz' 96, 'wdth' 75, 'wght' 800""#
         );
         assert_eq!(
-            Role::Name.attributes(),
-            r#"font-family="Archivo" font-variation-settings="'wdth' 100, 'wght' 600""#
+            Role::Label.attributes(),
+            r#"font-family="Bricolage Grotesque" font-variation-settings="'opsz' 12, 'wdth' 100, 'wght' 500""#
+        );
+        assert_eq!(
+            Role::Text.attributes(),
+            r#"font-family="Bricolage Grotesque" font-variation-settings="'opsz' 14, 'wdth' 100, 'wght' 600""#
+        );
+        assert_eq!(
+            Role::Strong.attributes(),
+            r#"font-family="Bricolage Grotesque" font-variation-settings="'opsz' 14, 'wdth' 100, 'wght' 800""#
         );
         assert_eq!(
             Role::Mono.attributes(),
@@ -302,28 +399,38 @@ mod tests {
     }
 
     #[test]
-    fn the_bundled_faces_are_variable_with_the_axes_the_roles_use() {
-        let axes = |face: Face| -> Vec<(String, f32, f32)> {
+    fn the_bundled_faces_have_the_axes_the_roles_use() {
+        let axes = |face: Face| -> Vec<(String, f32, f32, f32)> {
             FontRef::new(face.data())
                 .unwrap()
                 .axes()
                 .iter()
-                .map(|axis| (axis.tag().to_string(), axis.min_value(), axis.max_value()))
+                .map(|axis| {
+                    (
+                        axis.tag().to_string(),
+                        axis.min_value(),
+                        axis.default_value(),
+                        axis.max_value(),
+                    )
+                })
                 .collect()
         };
+        assert_eq!(axes(Face::InstrumentSerif), []);
+        assert_eq!(axes(Face::InstrumentSerifItalic), []);
+        // The default instance is the heavy display one, so every role sets
+        // all three axes.
         assert_eq!(
-            axes(Face::Archivo),
+            axes(Face::Bricolage),
             [
-                ("wght".to_owned(), 100.0, 900.0),
-                ("wdth".to_owned(), 62.0, 125.0)
+                ("opsz".to_owned(), 12.0, 96.0, 96.0),
+                ("wght".to_owned(), 200.0, 800.0, 800.0),
+                ("wdth".to_owned(), 75.0, 100.0, 100.0),
             ]
         );
         assert_eq!(
             axes(Face::JetBrainsMono),
-            [("wght".to_owned(), 100.0, 800.0)]
+            [("wght".to_owned(), 100.0, 400.0, 800.0)]
         );
-        assert_eq!(Face::Archivo.axes(), ["wdth", "wght"]);
-        assert_eq!(Face::JetBrainsMono.axes(), ["wght"]);
     }
 
     #[test]
@@ -334,60 +441,82 @@ mod tests {
     }
 
     #[test]
-    fn widths_scale_with_the_size() {
+    fn widths_scale_with_the_size_since_the_optical_size_belongs_to_the_role() {
         let measure = TextMeasure::new();
         for role in Role::ALL {
-            let small = measure.width(role, "Harbour Half", 20.0);
-            let large = measure.width(role, "Harbour Half", 40.0);
+            let small = measure.width(role, "Harbour Half", 11.0);
+            let large = measure.width(role, "Harbour Half", 44.0);
             assert!(small > 0.0, "{role:?} width was {small}");
             assert_near(
                 large,
-                2.0 * small,
+                4.0 * small,
                 1e-3,
-                &format!("{role:?} at twice the size"),
+                &format!("{role:?} at four times the size"),
             );
         }
     }
 
     #[test]
-    fn the_width_axis_and_the_weight_widen_the_text() {
+    fn the_italic_the_weight_and_the_width_change_the_measure() {
         let measure = TextMeasure::new();
         let width = |role: Role| measure.width(role, "Harbour Half", 40.0);
         assert!(
-            width(Role::Numeral) < width(Role::Label),
-            "wdth 85 is not narrower than 100"
+            (width(Role::Display) - width(Role::DisplayItalic)).abs() > 0.02 * width(Role::Display),
+            "the italic measures like the roman: {} and {}",
+            width(Role::Display),
+            width(Role::DisplayItalic)
         );
         assert!(
-            width(Role::Text) < width(Role::Label),
-            "wght 400 is not narrower than 500"
+            width(Role::Text) < width(Role::Strong),
+            "wght 600 is not narrower than 800"
         );
         assert!(
-            width(Role::Label) < width(Role::Display),
-            "wdth 112 is not wider than 100"
+            width(Role::Numeral) < width(Role::Strong),
+            "wdth 75 at opsz 96 is not narrower than wdth 100 at opsz 14"
         );
     }
 
     #[test]
-    fn the_name_is_set_bolder_than_a_label() {
+    fn width_spaced_adds_the_letter_spacing_between_the_characters() {
         let measure = TextMeasure::new();
-        let width = |role: Role| measure.width(role, "Mara Lindqvist", 18.0);
-        assert!(
-            width(Role::Label) < width(Role::Name),
-            "wght 600 is not wider than 500: Label {}, Name {}",
-            width(Role::Label),
-            width(Role::Name)
+        let plain = measure.width(Role::Label, "SLOWER", 10.0);
+        assert_near(
+            measure.width_spaced(Role::Label, "SLOWER", 10.0, 1.5),
+            plain + 5.0 * 1.5,
+            1e-3,
+            "SLOWER tracked by 1.5",
         );
+        let time = measure.width(Role::Numeral, "1:48:58", 132.0);
+        assert_near(
+            measure.width_spaced(Role::Numeral, "1:48:58", 132.0, -3.0),
+            time - 6.0 * 3.0,
+            1e-3,
+            "1:48:58 tracked by -3",
+        );
+        assert_near(
+            measure.width_spaced(Role::Label, "\u{b7}", 10.0, 2.2),
+            measure.width(Role::Label, "\u{b7}", 10.0),
+            1e-3,
+            "a single character",
+        );
+        assert_eq!(measure.width_spaced(Role::Label, "", 10.0, 2.2), 0.0);
     }
 
     #[test]
     fn a_character_without_a_glyph_counts_as_the_average_advance() {
         let measure = TextMeasure::new();
-        // OS/2 average advances: Archivo 575, JetBrains Mono 602 of 1000 units.
+        // OS/2 average advances of 1000 units per em.
         assert_near(
             measure.width(Role::Text, "\u{1}", 100.0),
-            57.5,
+            53.5,
             1e-3,
-            "Archivo",
+            "Bricolage Grotesque",
+        );
+        assert_near(
+            measure.width(Role::Display, "\u{1}", 100.0),
+            42.2,
+            1e-3,
+            "Instrument Serif",
         );
         assert_near(
             measure.width(Role::Mono, "\u{1}", 10.0),
@@ -423,12 +552,17 @@ mod tests {
     fn measured_widths_match_the_rendered_layout() {
         let measure = TextMeasure::new();
         let cases = [
-            (Role::Display, 40.0, "Harbour Half"),
-            (Role::Display, 28.0, "Schneider Electric Marathon de Paris"),
-            (Role::Numeral, 72.0, "1:48:58"),
-            (Role::Label, 12.0, "Lisbon \u{b7} 19 April 2026"),
-            (Role::Name, 18.0, "Maximilian Oberhauser-Lindqvist"),
-            (Role::Text, 20.0, "21.10 km"),
+            (Role::Display, 76.0, "Harbour Half"),
+            (Role::Display, 44.0, "Schneider Electric Marathon de Paris"),
+            (Role::DisplayItalic, 76.0, "Harbour Half"),
+            (Role::DisplayItalic, 26.0, "Maximilian Oberhauser-Lindqvist"),
+            (Role::Numeral, 132.0, "1:48:58"),
+            (Role::Label, 11.0, "LISBON \u{b7} 19 APRIL 2026"),
+            // At 40 px resvg would set opsz 40 on its own; the role sets 12.
+            (Role::Label, 40.0, "average pace"),
+            (Role::Text, 17.0, "21.10 km"),
+            (Role::Text, 40.0, "fastest km 21"),
+            (Role::Strong, 17.0, "4:48"),
             (Role::Mono, 11.0, "21"),
         ];
         for (role, size, text) in cases {

@@ -121,7 +121,11 @@ fn a_synthetic_half_renders_to_the_frame_with_its_texts_legend_and_rule() {
         "render-half.gpx",
         &meta("Mara Lindqvist", "Harbour Half", Some("Lisbon")),
     );
-    assert_eq!(data.fastest, "km 21 \u{b7} 4:48");
+    let fastest = data.stats.fastest.as_ref().expect("a fastest kilometre");
+    assert_eq!(
+        (fastest.label.as_str(), fastest.pace.as_str()),
+        ("fastest km 21", "4:48")
+    );
     let renderer = Renderer::new().unwrap();
     let svg = renderer.svg(&data).unwrap();
     let image = Image::decode(&renderer.png(&svg, SCALE).unwrap());
@@ -130,59 +134,61 @@ fn a_synthetic_half_renders_to_the_frame_with_its_texts_legend_and_rule() {
     assert_eq!((image.width, image.height), (1440, 2000));
     assert_colour(image.at(5.0, 5.0), light.paper, "the paper");
     assert!(
-        image.has_dark_pixels(48.0..300.0, 62.0..92.0),
+        image.has_dark_pixels(48.0..300.0, 60.0..108.0),
         "the title is not drawn"
     );
     assert!(
-        image.has_dark_pixels(48.0..200.0, 840.0..884.0),
+        image.has_dark_pixels(48.0..200.0, 128.0..146.0),
+        "the byline is not drawn"
+    );
+    assert!(
+        image.has_dark_pixels(48.0..200.0, 830.0..912.0),
         "the time is not drawn"
     );
     assert!(
-        image.has_dark_pixels(48.0..200.0, 924.0..937.0),
-        "the name is not drawn"
-    );
-    assert!(
-        image.has_dark_pixels(560.0..672.0, 822.0..837.0),
+        image.has_dark_pixels(48.0..100.0, 942.0..954.0),
         "the distance is not drawn"
     );
     assert_colour(
-        image.at(49.0, 761.0),
+        image.at(49.0, 757.0),
         &data.legend[0],
         "the slow end of the legend",
     );
     assert_colour(
-        image.at(206.0, 761.0),
+        image.at(206.0, 757.0),
         &data.legend[31],
         "the fast end of the legend",
     );
-    assert_colour(image.at(360.0, 800.5), light.rule, "the rule");
-    for text in [
-        "Harbour Half",
-        "Lisbon \u{b7} 19 April 2026",
-        "Mara Lindqvist",
-        "21.10 km",
-        "km 21 \u{b7} 4:48",
+    assert_colour(image.at(360.0, 740.5), light.rule, "the rule");
+    for markup in [
+        ">Harbour <tspan",
+        ">Half</tspan></text>",
+        ">Mara Lindqvist</text>",
+        ">LISBON \u{b7} 19 APRIL 2026</text>",
+        ">21.10 <tspan",
+        ">fastest km 21</text>",
+        ">4:48</text>",
     ] {
-        assert!(
-            svg.contains(&format!(">{text}</text>")),
-            "no {text:?} in {svg}"
-        );
+        assert!(svg.contains(markup), "no {markup:?} in {svg}");
     }
 }
 
 #[test]
-fn a_run_under_a_kilometre_has_no_fastest_pair_and_no_empty_text() {
+fn a_run_under_a_kilometre_has_no_fastest_block_and_no_empty_text() {
     let xml = common::synthetic_gpx(600.0, |_| 300.0, START);
     let data = card_of(
         &xml,
         "render-600m.gpx",
         &meta("Mara Lindqvist", "Lunch Run", None),
     );
-    assert_eq!(data.fastest, "");
+    assert_eq!(data.stats.fastest, None);
     let svg = Renderer::new().unwrap().svg(&data).unwrap();
-    assert!(!svg.contains(">fastest</text>"), "{svg}");
-    assert!(!svg.contains("></text>"), "an empty text element in {svg}");
-    assert!(svg.contains(">19 April 2026</text>"), "{svg}");
+    assert!(!svg.contains("fastest km"), "{svg}");
+    assert!(
+        !svg.contains("\"></text>"),
+        "an empty text element in {svg}"
+    );
+    assert!(svg.contains(">19 APRIL 2026</text>"), "{svg}");
 }
 
 #[test]
@@ -197,19 +203,19 @@ fn long_names_and_titles_stay_inside_the_content_box() {
     let image = Image::decode(&Renderer::new().unwrap().render(&data, SCALE).unwrap());
 
     assert!(
-        image.has_dark_pixels(48.0..300.0, 66.0..92.0),
+        image.has_dark_pixels(48.0..300.0, 80.0..108.0),
         "the title is not drawn"
     );
     assert!(
-        image.has_dark_pixels(48.0..300.0, 924.0..937.0),
-        "the name is not drawn"
+        image.has_dark_pixels(48.0..300.0, 128.0..146.0),
+        "the byline is not drawn"
     );
     let paper = rgb_of(Theme::Light.tokens().paper);
     let right_of_the_box = (674.0 * SCALE) as u32..(720.0 * SCALE) as u32;
     for (what, rows) in [
-        ("title", 60.0..100.0),
-        ("subline", 106.0..122.0),
-        ("name", 918.0..944.0),
+        ("title", 50.0..120.0),
+        ("byline", 122.0..154.0),
+        ("subline", 162.0..178.0),
     ] {
         let rows = (rows.start * SCALE) as u32..(rows.end * SCALE) as u32;
         assert!(
@@ -221,7 +227,7 @@ fn long_names_and_titles_stay_inside_the_content_box() {
 }
 
 #[test]
-fn the_runner_is_set_semibold_at_18_px_on_the_baseline_936() {
+fn the_runner_is_the_italic_byline_at_26_px_on_the_baseline_146() {
     let xml = common::synthetic_gpx(HALF_M, half_pace, START);
     let data = card_of(
         &xml,
@@ -235,18 +241,19 @@ fn the_runner_is_set_semibold_at_18_px_on_the_baseline_936() {
     let tag = &svg[svg[..end].rfind("<text").expect("a text start tag")..=end];
     for attribute in [
         r#"x="48""#,
-        r#"y="936""#,
-        r#"font-size="18""#,
-        "'wdth' 100, 'wght' 600",
+        r#"y="146""#,
+        r#"font-size="26""#,
+        r#"font-family="Instrument Serif" font-style="italic""#,
     ] {
         assert!(tag.contains(attribute), "no {attribute} in {tag}");
     }
+    assert_eq!(svg.matches(">Mara Lindqvist<").count(), 1, "{svg}");
 }
 
 #[test]
 fn the_route_preview_is_inked_flush_right_in_its_box_and_clear_of_the_rule() {
-    // A loop taller than the 200 x 56 box: it spans y 734 to 790 and is moved
-    // right; it starts on its southern edge, so the start marker reaches y 792.5.
+    // A loop taller than the 200 x 56 box: it spans y 750 to 806 and is moved
+    // right; it starts on its southern edge, so the start marker reaches y 808.5.
     let xml = common::synthetic_gpx(HALF_M, half_pace, START);
     let meta = meta("Mara Lindqvist", "Harbour Half", Some("Lisbon"));
     let renderer = Renderer::new().unwrap();
@@ -257,22 +264,26 @@ fn the_route_preview_is_inked_flush_right_in_its_box_and_clear_of_the_rule() {
         let image = Image::decode(&renderer.render(&data, SCALE).unwrap());
         let previewed = variant != Variant::Trail;
         assert_eq!(
-            image.has_dark_pixels(472.0..673.0, 734.0..791.0),
+            image.has_dark_pixels(472.0..673.0, 750.0..807.0),
             previewed,
             "{variant}: the preview box"
         );
         assert_eq!(
-            image.has_dark_pixels(670.0..673.0, 734.0..791.0),
+            image.has_dark_pixels(670.0..673.0, 750.0..807.0),
             previewed,
             "{variant}: flush right at x 672"
         );
         assert!(
-            image.is_all(674.0..720.0, 724.0..800.0, paper),
+            image.is_all(674.0..720.0, 724.0..810.0, paper),
             "{variant}: ink right of x 674"
         );
         assert!(
-            image.is_all(0.0..720.0, 793.0..800.0, paper),
-            "{variant}: ink between the preview and the rule"
+            image.is_all(0.0..720.0, 741.0..747.0, paper),
+            "{variant}: ink between the rule and the preview"
+        );
+        assert!(
+            image.is_all(472.0..720.0, 809.0..934.0, paper),
+            "{variant}: ink between the preview and the stats line"
         );
     }
 }
@@ -464,9 +475,56 @@ fn an_unknown_variant_exits_with_code_2_listing_the_variants() {
     assert!(stderr.contains("'nope'"), "{stderr}");
     assert!(stderr.contains("--variant"), "{stderr}");
     assert!(
-        stderr.contains("ribbon, spiral, trail, dots, wave, ledger"),
+        stderr.contains("spiral, ribbon, trail, dots, wave, ledger"),
         "{stderr}"
     );
+}
+
+#[test]
+fn help_lists_the_variants_spiral_first_and_names_it_the_default() {
+    let output = runcard(&["--help".as_ref()]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    let variant = &stdout[stdout.find("--variant").expect("the --variant flag")..];
+    let variant = &variant[..variant.find("--theme").expect("the --theme flag")];
+    assert!(variant.contains("[default: spiral]"), "{variant}");
+    let listed: Vec<String> = variant
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("- "))
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    let expected: Vec<String> = Variant::ALL
+        .iter()
+        .map(|v| format!("{}: {}", v.name(), v.description()))
+        .collect();
+    assert_eq!(listed, expected, "{variant}");
+}
+
+#[test]
+fn without_a_variant_the_binary_renders_the_spiral() {
+    let svg_for = |name: &str, args: &[&str]| {
+        let svg = output_path(name);
+        let png = output_path(&format!("{name}.png"));
+        let sample = sample_gpx();
+        let mut all: Vec<&std::ffi::OsStr> = vec![
+            sample.as_os_str(),
+            "--runner".as_ref(),
+            "Mara Lindqvist".as_ref(),
+            "--scale".as_ref(),
+            "0.1".as_ref(),
+            "-o".as_ref(),
+            png.as_os_str(),
+            "--svg".as_ref(),
+            svg.as_os_str(),
+        ];
+        all.extend(args.iter().map(|arg| std::ffi::OsStr::new(*arg)));
+        let output = runcard(&all);
+        assert!(output.status.success(), "{output:?}");
+        std::fs::read_to_string(&svg).expect("the svg is written")
+    };
+    let default = svg_for("cli-default.svg", &[]);
+    assert_eq!(default, svg_for("cli-spiral.svg", &["--variant", "spiral"]));
+    assert_ne!(default, svg_for("cli-ribbon.svg", &["--variant", "ribbon"]));
 }
 
 #[test]

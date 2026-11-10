@@ -8,14 +8,15 @@ use crate::model::{Analysis, Meta, SplitView};
 use crate::palette::Palette;
 use crate::render::px;
 use crate::route::{self, BBox};
-use crate::text::TextMeasure;
+use crate::text::{Role, TextMeasure};
 
-/// The visualisation zone inset by 24 px: the route is fitted into it.
+/// The visualisation zone, x 48 to 672 and y 200 to 724, inset by 24 px:
+/// the route is fitted into it.
 const TRAIL_BOX: BBox = BBox {
     x: 72.0,
-    y: 184.0,
+    y: 224.0,
     w: 576.0,
-    h: 512.0,
+    h: 476.0,
 };
 /// Most points the route is drawn with; a longer track keeps every n-th one.
 const MAX_POINTS: usize = 4000;
@@ -23,6 +24,16 @@ const MAX_POINTS: usize = 4000;
 const KM: f64 = 1000.0;
 /// Half the side of the finish square.
 const FINISH_HALF: f32 = 3.5;
+/// The pace of the fastest kilometre: Mono at 12 px, 14 px beside the
+/// centre of its 7 px ring, its baseline 4.5 px below it; left of the ring
+/// beyond [`LABEL_FLIP_X`], right of it before.
+const LABEL_SIZE: f32 = 12.0;
+const LABEL_OFFSET: f32 = 14.0;
+const LABEL_DROP: f32 = 4.5;
+const LABEL_FLIP_X: f32 = 600.0;
+/// The sides of the zone, which the pace stays between.
+const ZONE_LEFT: f32 = 48.0;
+const ZONE_RIGHT: f32 = 672.0;
 
 /// One kilometre of the route.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -35,6 +46,26 @@ pub struct Segment {
     pub color: String,
 }
 
+/// A text placed by its anchor on the baseline.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Label {
+    pub x: f32,
+    /// The baseline.
+    pub y: f32,
+    /// The SVG `text-anchor`, `start` or `end`.
+    pub anchor: &'static str,
+    pub text: String,
+}
+
+/// The fastest full kilometre: a ring halfway along it and its pace beside it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Callout {
+    /// Centre of the ring, the point halfway through the kilometre by distance.
+    pub centre: (f32, f32),
+    /// The pace, e.g. `4:48`.
+    pub label: Label,
+}
+
 /// What `templates/trail.svg` draws inside the visualisation zone.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Trail {
@@ -45,6 +76,8 @@ pub struct Trail {
     pub start: Option<(f32, f32)>,
     /// Centre of the finish square, the last point of the route.
     pub finish: Option<(f32, f32)>,
+    /// The ring on the fastest full kilometre and its pace.
+    pub fastest: Option<Callout>,
 }
 
 /// Lays out the trail in card pixels.
@@ -56,7 +89,7 @@ pub fn build(
     analysis: &Analysis,
     splits: &[SplitView],
     _palette: &Palette,
-    _measure: &TextMeasure,
+    measure: &TextMeasure,
     _meta: &Meta,
 ) -> Trail {
     let fitted = route::fit(&route::project(&analysis.points), TRAIL_BOX);
@@ -70,6 +103,7 @@ pub fn build(
             segments: Vec::new(),
             start: None,
             finish: None,
+            fastest: None,
         };
     }
     let (points, distances): (Vec<_>, Vec<_>) = decimate(track, MAX_POINTS).into_iter().unzip();
@@ -82,10 +116,56 @@ pub fn build(
             color: view.color.clone(),
         })
         .collect();
+    let fastest = analysis
+        .fastest
+        .and_then(|index| splits.iter().find(|s| s.index == index))
+        .map(|view| {
+            let middle = (f64::from(view.index) - 0.5) * KM;
+            let (x, y) = at_distance(&points, &distances, middle);
+            let width = measure.width(Role::Mono, &view.pace, LABEL_SIZE);
+            Callout {
+                centre: (x, y),
+                label: label(x, y, view.pace.clone(), width),
+            }
+        });
     Trail {
         segments,
         start: points.first().copied(),
         finish: points.last().copied(),
+        fastest,
+    }
+}
+
+/// The point where the running distance `distances` of `points` reaches
+/// `metres`, interpolated on the step that crosses it; the last point
+/// beyond the end.
+fn at_distance(points: &[(f32, f32)], distances: &[f64], metres: f64) -> (f32, f32) {
+    match distances.partition_point(|&d| d < metres) {
+        0 => points[0],
+        i if i == points.len() => points[i - 1],
+        i => {
+            let along = ((metres - distances[i - 1]) / (distances[i] - distances[i - 1])) as f32;
+            lerp(points[i - 1], points[i], along)
+        }
+    }
+}
+
+/// The pace `text`, `width` px wide, beside the ring at (`x`, `y`). The box
+/// is inset 24 px into the zone, so the pace never leaves it at the top or
+/// bottom; one that would cross a side is moved along its baseline until it
+/// ends on that side.
+fn label(x: f32, y: f32, text: String, width: f32) -> Label {
+    let (x, anchor) = if x > LABEL_FLIP_X {
+        (x - LABEL_OFFSET, "end")
+    } else {
+        (x + LABEL_OFFSET, "start")
+    };
+    let left = if anchor == "end" { x - width } else { x };
+    Label {
+        x: x + left.clamp(ZONE_LEFT, ZONE_RIGHT - width) - left,
+        y: y + LABEL_DROP,
+        anchor,
+        text,
     }
 }
 
@@ -160,6 +240,19 @@ impl Trail {
             finish => self
                 .finish
                 .map(|(x, y)| context! { x => px(x - FINISH_HALF), y => px(y - FINISH_HALF) }),
+            fastest => self.fastest.as_ref().map(|callout| {
+                let ((x, y), label) = (callout.centre, &callout.label);
+                context! {
+                    x => px(x),
+                    y => px(y),
+                    label => context! {
+                        x => px(label.x),
+                        y => px(label.y),
+                        anchor => label.anchor,
+                        text => &label.text,
+                    },
+                }
+            }),
         }
     }
 }
@@ -170,6 +263,7 @@ mod tests {
     use crate::geo::{self, EARTH_RADIUS_M};
     use crate::model::{Split, TrackPoint};
     use crate::route;
+    use crate::text::Role;
     use crate::theme::Theme;
 
     const LAT: f64 = 38.7;
@@ -394,15 +488,15 @@ mod tests {
         let (x0, y0, x1, y1) = extent(&line);
         assert_near(x0, 72.0, "min x");
         assert_near(x1, 648.0, "max x");
-        assert_near(y0, 440.0, "min y");
-        assert_near(y1, 440.0, "max y");
+        assert_near(y0, 462.0, "min y");
+        assert_near(y1, 462.0, "max y");
         // A 2.5 by 2.5 km L: a square of the zone's height, centred across.
         let square = all_points(&trail_of(&analysis(track(25, 25))));
         let (x0, y0, x1, y1) = extent(&square);
-        assert_near(x0, 104.0, "min x");
-        assert_near(x1, 616.0, "max x");
-        assert_near(y0, 184.0, "min y");
-        assert_near(y1, 696.0, "max y");
+        assert_near(x0, 122.0, "min x");
+        assert_near(x1, 598.0, "max x");
+        assert_near(y0, 224.0, "min y");
+        assert_near(y1, 700.0, "max y");
     }
 
     #[test]
@@ -420,9 +514,9 @@ mod tests {
             &route::project(&analysis.points),
             route::BBox {
                 x: 72.0,
-                y: 184.0,
+                y: 224.0,
                 w: 576.0,
-                h: 512.0,
+                h: 476.0,
             },
         );
         let trail = trail_of(&analysis);
@@ -506,9 +600,108 @@ mod tests {
             let trail = trail_of(&analysis);
             assert!(trail.segments.is_empty(), "{} points", points.len());
             assert_eq!((trail.start, trail.finish), (None, None));
+            assert_eq!(trail.fastest, None);
             let value = trail.to_value();
             assert!(value.get_attr("start").unwrap().is_none());
             assert!(value.get_attr("finish").unwrap().is_none());
+            assert!(value.get_attr("fastest").unwrap().is_none());
+        }
+    }
+
+    // ----- the callout -----
+
+    #[test]
+    fn the_point_at_a_distance_is_interpolated_on_the_step_that_reaches_it() {
+        let points = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 10.0)];
+        let distances = [0.0, 400.0, 800.0, 1200.0];
+        assert_eq!(at_distance(&points, &distances, 500.0), (12.5, 0.0));
+        assert_eq!(at_distance(&points, &distances, 400.0), (10.0, 0.0));
+        assert_eq!(at_distance(&points, &distances, 1000.0), (25.0, 5.0));
+        assert_eq!(at_distance(&points, &distances, 0.0), (0.0, 0.0));
+        assert_eq!(at_distance(&points, &distances, 1500.0), (30.0, 10.0));
+    }
+
+    fn assert_label(label: &Label, x: f32, y: f32, anchor: &str) {
+        assert!(
+            (label.x - x).abs() < 1e-3 && (label.y - y).abs() < 1e-3 && label.anchor == anchor,
+            "{label:?}, expected {x} {y} {anchor}"
+        );
+    }
+
+    #[test]
+    fn the_pace_sits_14_px_right_of_the_ring_or_left_of_it_beyond_x_600() {
+        let right = label(300.0, 400.0, "4:48".into(), 29.0);
+        assert_label(&right, 314.0, 404.5, "start");
+        assert_eq!(right.text, "4:48");
+        assert_label(
+            &label(600.0, 400.0, "4:48".into(), 29.0),
+            614.0,
+            404.5,
+            "start",
+        );
+        assert_label(
+            &label(620.0, 400.0, "4:48".into(), 29.0),
+            606.0,
+            404.5,
+            "end",
+        );
+    }
+
+    #[test]
+    fn a_pace_that_would_leave_the_zone_at_a_side_ends_on_its_edge() {
+        // From x 614 a 70 px pace would end at 684: moved left to end at 672.
+        assert_label(
+            &label(600.0, 400.0, "4:48".into(), 70.0),
+            602.0,
+            404.5,
+            "start",
+        );
+    }
+
+    #[test]
+    fn the_fastest_kilometre_gets_a_ring_halfway_along_it_and_its_pace_beside_it() {
+        // 100 m steps east: km 2 is halfway at 1500 m, on the start's height.
+        let analysis = analysis(track(25, 9));
+        let mut views = views(&analysis);
+        views[1].pace = "4:40".into();
+        let measure = TextMeasure::new();
+        let trail = build(
+            &analysis,
+            &views,
+            &Palette::for_theme(Theme::Light),
+            &measure,
+            &meta(),
+        );
+        let callout = trail.fastest.expect("a callout");
+        let (x, y) = callout.centre;
+        let start = trail.start.unwrap();
+        assert_near(x, 72.0 + 576.0 * 1500.0 / 2500.0, "ring x");
+        assert_near(y, start.1, "ring y");
+        let width = measure.width(Role::Mono, "4:40", 12.0);
+        assert_eq!(callout.label, label(x, y, "4:40".into(), width));
+        assert_eq!(callout.label.text, "4:40");
+        let mut slowest = analysis.clone();
+        slowest.fastest = None;
+        assert_eq!(trail_of(&slowest).fastest, None);
+    }
+
+    #[test]
+    fn the_ring_and_its_pace_stay_inside_the_zone_wherever_the_fastest_kilometre_is() {
+        // A 4 by 4 km square: its corners reach every edge of the box.
+        let width = TextMeasure::new().width(Role::Mono, "10:48", 12.0);
+        let analysis = analysis(track(40, 40));
+        let trail = trail_of(&analysis);
+        for (x, y) in all_points(&trail) {
+            let label = label(x, y, "10:48".into(), width);
+            let left = if label.anchor == "end" {
+                label.x - width
+            } else {
+                label.x
+            };
+            assert!(left >= 48.0 && left + width <= 672.0, "{label:?}");
+            // The figures are 8.76 px tall at 12 px; the ring reaches 8 px out.
+            assert!(label.y - 8.76 >= 200.0 && label.y <= 724.0, "{label:?}");
+            assert!(y - 8.0 >= 200.0 && y + 8.0 <= 724.0, "ring at {y}");
         }
     }
 
@@ -522,6 +715,15 @@ mod tests {
             }],
             start: Some((100.123_45, 200.987_65)),
             finish: Some((300.0, 400.0)),
+            fastest: Some(Callout {
+                centre: (250.004, 300.556),
+                label: Label {
+                    x: 264.004,
+                    y: 305.056,
+                    anchor: "start",
+                    text: "4:48".into(),
+                },
+            }),
         };
         let value = trail.to_value();
         let get = |path: &str| {
@@ -535,6 +737,12 @@ mod tests {
         // The finish square is 7 px wide, centred on the last point.
         assert_eq!(get("finish.x"), "296.5");
         assert_eq!(get("finish.y"), "396.5");
+        assert_eq!(get("fastest.x"), "250");
+        assert_eq!(get("fastest.y"), "300.56");
+        assert_eq!(get("fastest.label.x"), "264");
+        assert_eq!(get("fastest.label.y"), "305.06");
+        assert_eq!(get("fastest.label.anchor"), "start");
+        assert_eq!(get("fastest.label.text"), "4:48");
         let segment = value
             .get_attr("segments")
             .unwrap()

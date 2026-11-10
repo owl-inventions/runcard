@@ -11,7 +11,10 @@ fetch() {
   curl -fsSL "$url" -o "$out"
 }
 
-fetch "$base/archivo/Archivo%5Bwdth%2Cwght%5D.ttf" Archivo-Variable.ttf
+fetch "$base/instrumentserif/InstrumentSerif-Regular.ttf" InstrumentSerif-Regular.ttf
+fetch "$base/instrumentserif/InstrumentSerif-Italic.ttf" InstrumentSerif-Italic.ttf
+fetch "$base/bricolagegrotesque/BricolageGrotesque%5Bopsz%2Cwdth%2Cwght%5D.ttf" BricolageGrotesque-Variable.ttf
 fetch "$base/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf" JetBrainsMono-Variable.ttf
-fetch "$base/archivo/OFL.txt" OFL-Archivo.txt
+fetch "$base/instrumentserif/OFL.txt" OFL-InstrumentSerif.txt
+fetch "$base/bricolagegrotesque/OFL.txt" OFL-BricolageGrotesque.txt
 fetch "$base/jetbrainsmono/OFL.txt" OFL-JetBrainsMono.txt

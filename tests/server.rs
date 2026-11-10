@@ -109,7 +109,7 @@ async fn the_event_city_and_date_parts_reach_the_card() {
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let svg = String::from_utf8(body.to_vec()).unwrap();
     assert!(svg.contains(">Spreelauf</text>"), "{svg}");
-    assert!(svg.contains(">Lisbon \u{b7} 3 May 2026</text>"), "{svg}");
+    assert!(svg.contains(">LISBON \u{b7} 3 MAY 2026</text>"), "{svg}");
 }
 
 #[tokio::test]
@@ -130,12 +130,12 @@ async fn empty_optional_parts_count_as_not_given_and_unknown_parts_are_ignored()
     let (status, _, body) = send(app(), request).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let svg = String::from_utf8(body.to_vec()).unwrap();
-    let ribbon_light = svg_card(&[("variant", "ribbon"), ("theme", "light")]).await;
-    assert_eq!(svg, ribbon_light, "not the default ribbon on light paper");
+    let spiral_light = svg_card(&[("variant", "spiral"), ("theme", "light")]).await;
+    assert_eq!(svg, spiral_light, "not the default spiral on light paper");
     assert!(svg.contains(r##"fill="#f6f6f4""##), "not light: {svg}");
     assert!(svg.contains(">Mara Lindqvist</text>"), "{svg}");
-    assert!(svg.contains(">Harbour Half</text>"), "{svg}");
-    assert!(svg.contains(">27 September 2026</text>"), "{svg}");
+    assert!(svg.contains(">Harbour <tspan"), "{svg}");
+    assert!(svg.contains(">27 SEPTEMBER 2026</text>"), "{svg}");
 }
 
 /// The SVG card for the five kilometres with `parts` besides gpx, runner and format.
@@ -254,11 +254,18 @@ async fn the_variant_part_picks_the_card_look() {
     assert!(body.starts_with(PNG_SIGNATURE));
     assert_eq!(png_size(&body), (720, 1000));
 
-    let ribbon = svg_card(&[("variant", "ribbon")]).await;
-    for variant in ["spiral", "trail", "dots", "wave", "ledger"] {
+    let spiral = svg_card(&[("variant", "spiral")]).await;
+    for variant in ["ribbon", "trail", "dots", "wave", "ledger"] {
         let svg = svg_card(&[("variant", variant)]).await;
-        assert_ne!(svg, ribbon, "{variant} renders the ribbon");
+        assert_ne!(svg, spiral, "{variant} renders the spiral");
     }
+}
+
+#[tokio::test]
+async fn without_a_variant_part_the_card_is_the_spiral() {
+    let svg = svg_card(&[]).await;
+    assert_eq!(svg, svg_card(&[("variant", "spiral")]).await);
+    assert_ne!(svg, svg_card(&[("variant", "ribbon")]).await);
 }
 
 #[tokio::test]
@@ -309,7 +316,7 @@ async fn an_unknown_variant_is_a_bad_request_listing_the_variants() {
     let message = error_of(app(), request, StatusCode::BAD_REQUEST).await;
     assert_eq!(
         message,
-        r#"invalid variant: expected one of ribbon, spiral, trail, dots, wave, ledger, got "nope""#
+        r#"invalid variant: expected one of spiral, ribbon, trail, dots, wave, ledger, got "nope""#
     );
 }
 
@@ -320,7 +327,7 @@ async fn variants_lists_every_variant_in_display_order() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type(&headers), "application/json");
     assert!(
-        body.starts_with(br#"[{"name":"ribbon","description":""#),
+        body.starts_with(br#"[{"name":"spiral","description":""#),
         "{}",
         String::from_utf8_lossy(&body)
     );
@@ -337,7 +344,7 @@ async fn variants_lists_every_variant_in_display_order() {
         .collect();
     assert_eq!(
         names,
-        ["ribbon", "spiral", "trail", "dots", "wave", "ledger"]
+        ["spiral", "ribbon", "trail", "dots", "wave", "ledger"]
     );
 }
 
