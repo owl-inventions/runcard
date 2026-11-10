@@ -94,9 +94,12 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(&args.bind)
         .await
         .with_context(|| format!("binding {}", args.bind))?;
+    // Installed before the address is announced, so a signal that arrives
+    // right after the `listening on` line is handled and not fatal.
+    let shutdown = shutdown_signal().context("installing the shutdown signal handlers")?;
     tracing::info!("listening on {}", listener.local_addr()?);
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown)
         .await
         .context("serving")?;
     Ok(())
@@ -124,35 +127,34 @@ fn init_logging(format: LogFormat) {
     }
 }
 
-/// Resolves on ctrl-c or, on Unix, SIGTERM (what Docker and systemd send).
-async fn shutdown_signal() {
-    let ctrl_c = async {
+/// Installs the shutdown handlers now and returns the future that resolves
+/// on ctrl-c or, on Unix, SIGTERM (what Docker and systemd send).
+///
+/// The handlers are registered when this is called, not when the future is
+/// first polled, so the server never dies of a signal it has promised to
+/// handle.
+fn shutdown_signal() -> std::io::Result<impl std::future::Future<Output = ()>> {
+    #[cfg(unix)]
+    let (mut interrupt, mut terminate) = {
+        use tokio::signal::unix::{signal, SignalKind};
+        (
+            signal(SignalKind::interrupt())?,
+            signal(SignalKind::terminate())?,
+        )
+    };
+    Ok(async move {
+        #[cfg(unix)]
+        tokio::select! {
+            _ = interrupt.recv() => {},
+            _ = terminate.recv() => {},
+        }
+        #[cfg(not(unix))]
         if let Err(error) = tokio::signal::ctrl_c().await {
             tracing::error!(%error, "cannot listen for ctrl-c");
             std::future::pending::<()>().await;
         }
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        use tokio::signal::unix::{signal, SignalKind};
-        match signal(SignalKind::terminate()) {
-            Ok(mut term) => {
-                term.recv().await;
-            }
-            Err(error) => {
-                tracing::error!(%error, "cannot listen for SIGTERM");
-                std::future::pending::<()>().await;
-            }
-        }
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
-    }
-    tracing::info!("shutting down");
+        tracing::info!("shutting down");
+    })
 }
 
 /// Parses an `--allow-origin` value into a header value.
