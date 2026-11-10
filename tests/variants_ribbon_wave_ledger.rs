@@ -3,6 +3,7 @@
 
 mod common;
 
+use runcard::palette::Palette;
 use runcard::pipeline::{CardRequest, Pipeline};
 use runcard::text::Role;
 use runcard::{gpx, splits, Theme, Variant};
@@ -94,10 +95,44 @@ fn rgb_of(hex: &str) -> [u8; 3] {
     [channel(1), channel(3), channel(5)]
 }
 
-/// The markup before the legend: the visualisation (twice on dark paper),
-/// without the route preview the frame draws after the legend.
+/// The visualisation alone (twice on dark paper): the markup between the
+/// header's subline and the rule above the legend.
 fn picture(svg: &str) -> &str {
-    &svg[..svg.find(">SLOWER</text>").expect("the legend")]
+    let subline = svg.find(r#"<text x="48" y="174""#).expect("the subline");
+    let start = subline + svg[subline..].find("</text>").expect("a closed subline");
+    &svg[start..svg.find(r#"<rect x="48" y="740""#).expect("the rule")]
+}
+
+/// The element each kilometre of `variant` is drawn as, and the attribute
+/// its colour is set in.
+fn kilometre(variant: Variant) -> (&'static str, &'static str) {
+    match variant {
+        Variant::Ribbon | Variant::Ledger => ("rect", "fill"),
+        Variant::Wave => ("path", "stroke"),
+        other => panic!("{other} is not a variant of this file"),
+    }
+}
+
+/// Every start tag in `svg` filled or stroked in `colour`.
+fn painted<'a>(svg: &'a str, colour: &str) -> Vec<&'a str> {
+    let (fill, stroke) = (
+        format!(r#" fill="{colour}""#),
+        format!(r#" stroke="{colour}""#),
+    );
+    svg.match_indices('<')
+        .map(|(start, _)| &svg[start..start + svg[start..].find('>').expect("a closed tag")])
+        .filter(|tag| tag.contains(&fill) || tag.contains(&stroke))
+        .collect()
+}
+
+/// The start tag of an element without its `x` and `y`: what two texts set
+/// alike share wherever they stand.
+fn unplaced(tag: &str) -> String {
+    tag[..tag.find('>').expect("a closed start tag")]
+        .split(' ')
+        .filter(|attribute| !attribute.starts_with("x=") && !attribute.starts_with("y="))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The ribbon's bars: rounded rects from x 88 (the legend has a plain one there).
@@ -160,13 +195,12 @@ fn each_variant_renders_in_light_and_dark_at_the_card_size_without_template_synt
 }
 
 #[test]
-fn ribbon_draws_a_bar_and_a_number_per_kilometre_and_marks_the_fastest_with_its_pace() {
+fn ribbon_draws_a_bar_and_a_number_per_kilometre_and_no_outline() {
     let xml = ten_k();
     assert_eq!(split_count(&xml), 11);
     for theme in Theme::ALL {
         let svg = svg_of(&xml, Variant::Ribbon, theme);
         let copies = copies(theme);
-        let tokens = theme.tokens();
         assert_eq!(bars(&svg), 11 * copies, "{theme}");
         assert_eq!(
             svg.matches(r#"<text x="76" "#).count(),
@@ -174,20 +208,11 @@ fn ribbon_draws_a_bar_and_a_number_per_kilometre_and_marks_the_fastest_with_its_
             "{theme}"
         );
         assert_eq!(svg.matches(r#"opacity="0.6""#).count(), copies, "{theme}");
-        let outline = format!(r#"fill="none" stroke="{}" stroke-width="2""#, tokens.marker);
-        assert_eq!(svg.matches(&outline).count(), copies, "{theme}: {svg}");
-        // Km 7's pace inside the right end of its bar, which reaches x 672.
-        let pace = format!(
-            r#"<text x="662" y="{}" text-anchor="end" {} font-size="12" fill="{}">4:30</text>"#,
-            200.0 + 22.0 * 6.0 + 9.0 + 4.5,
-            Role::Mono.attributes(),
-            tokens.on_fast
-        );
-        assert_eq!(
-            picture(&svg).matches(&pace).count(),
-            copies,
-            "{theme}: {svg}"
-        );
+        // Km 7's bar reaches x 672 like any other at the fast anchor, and
+        // nothing in the picture is stroked.
+        let fastest = r#"<rect x="88" y="332" width="584" height="18" rx="9""#;
+        assert_eq!(svg.matches(fastest).count(), copies, "{theme}: {svg}");
+        assert!(!picture(&svg).contains(" stroke="), "{theme}: {svg}");
         // Eleven rows of 18 px and 4 px gaps from the top of the zone.
         assert!(svg.contains(r#"y="200" width="#), "{svg}");
         assert!(svg.contains(r#"y="420" width="#), "{svg}");
@@ -206,12 +231,11 @@ fn ribbon_numbers_only_every_fifth_and_the_last_kilometre_of_a_marathon() {
 }
 
 #[test]
-fn wave_draws_a_section_into_every_kilometre_after_the_first_over_its_fill() {
+fn wave_draws_a_section_into_every_kilometre_after_the_first_over_its_fill_and_no_dot() {
     let xml = ten_k();
     for theme in Theme::ALL {
         let svg = svg_of(&xml, Variant::Wave, theme);
         let copies = copies(theme);
-        let marker = theme.tokens().marker;
         // Eleven points, ten sections between them, and the fill.
         let sections = r#"stroke-width="4" stroke-linecap="round""#;
         assert_eq!(svg.matches(sections).count(), 10 * copies, "{theme}: {svg}");
@@ -229,24 +253,12 @@ fn wave_draws_a_section_into_every_kilometre_after_the_first_over_its_fill() {
             "{theme}"
         );
         assert_eq!(svg.matches(">average</text>").count(), copies, "{theme}");
-        // Km 7's dot at the fast anchor in the marker colour, its pace centred
-        // 12 px above it.
-        let dot = format!(r#" cy="240" r="5" fill="{marker}"/>"#);
-        assert_eq!(svg.matches(&dot).count(), copies, "{theme}: {svg}");
-        let pace = format!(
-            r#" y="228" text-anchor="middle" {} font-size="12" fill="{marker}">4:30</text>"#,
-            Role::Mono.attributes()
-        );
-        assert_eq!(
-            picture(&svg).matches(&pace).count(),
-            copies,
-            "{theme}: {svg}"
-        );
+        assert!(!picture(&svg).contains("<circle "), "{theme}: {svg}");
     }
 }
 
 #[test]
-fn ledger_sets_a_row_per_kilometre_its_fastest_in_the_marker_colour_and_bold() {
+fn ledger_sets_a_row_per_kilometre_the_fastest_like_every_other() {
     let xml = ten_k();
     for theme in Theme::ALL {
         let svg = svg_of(&xml, Variant::Ledger, theme);
@@ -254,28 +266,24 @@ fn ledger_sets_a_row_per_kilometre_its_fastest_in_the_marker_colour_and_bold() {
         let tokens = theme.tokens();
         let paces = paces(&svg);
         assert_eq!(paces.len(), 11 * copies, "{theme}: {svg}");
-        // Every pace in ink but km 7's in the marker colour; the kilometre
-        // colours only in the swatches.
+        // Every pace set alike in ink, km 7's too; the kilometre colours only
+        // in the swatches.
         for pace in &paces {
-            let expected = if pace.contains(">4:30</text>") {
-                tokens.marker
-            } else {
-                tokens.ink
-            };
-            assert_eq!(fill(pace), expected, "{theme}: {pace}");
+            assert_eq!(fill(pace), tokens.ink, "{theme}: {pace}");
+            assert_eq!(unplaced(pace), unplaced(paces[0]), "{theme}: {pace}");
         }
+        assert!(!svg.contains("'wght' 700"), "{theme}: {svg}");
+        // Every kilometre's number muted, km 7's too.
         let number = format!(
-            r#"{} font-size="13" fill="{}">7</text>"#,
+            r#"{} font-size="13" fill="{}">"#,
             Role::Mono.attributes(),
-            tokens.marker
+            tokens.muted
         );
-        assert_eq!(svg.matches(&number).count(), copies, "{theme}: {svg}");
-        let muted = format!(r#"fill="{}">"#, tokens.muted);
-        let numbers = svg.matches(&format!(r#"font-size="13" {muted}"#)).count();
+        assert_eq!(svg.matches(&number).count(), 11 * copies, "{theme}: {svg}");
         assert_eq!(
-            numbers,
-            10 * copies,
-            "{theme}: the other kilometres' numbers"
+            svg.matches(&format!("{number}7</text>")).count(),
+            copies,
+            "{theme}: {svg}"
         );
         let swatches = swatches(&svg);
         assert_eq!(swatches.len(), 11 * copies, "{theme}: {svg}");
@@ -290,12 +298,6 @@ fn ledger_sets_a_row_per_kilometre_its_fastest_in_the_marker_colour_and_bold() {
             .filter(|swatch| swatch.contains(r#"opacity="0.6""#))
             .collect();
         assert_eq!(faded.len(), copies, "{theme}: the partial kilometre");
-        assert_eq!(
-            svg.matches(r#"font-variation-settings="'wght' 700""#)
-                .count(),
-            copies,
-            "{theme}"
-        );
         assert_eq!(
             picture(&svg).matches(">4:30</text>").count(),
             copies,
@@ -314,22 +316,64 @@ fn ledger_spreads_a_half_over_two_columns() {
     assert_eq!(split_count(&xml), 22);
     let svg = svg_of(&xml, Variant::Ledger, Theme::Light);
     // Eleven rows in each column: the first from x 48 to 348, the second
-    // from x 372 to 672. Every number muted but the fastest kilometre's.
-    let tokens = Theme::Light.tokens();
-    let numbers = |fill: &str| {
-        let number = format!(
-            r#"{} font-size="13" fill="{fill}""#,
-            Role::Mono.attributes()
-        );
-        svg.matches(&number).count()
-    };
-    assert_eq!(numbers(tokens.muted), 21, "{svg}");
-    assert_eq!(numbers(tokens.marker), 1, "{svg}");
+    // from x 372 to 672. Every number muted.
+    let number = format!(
+        r#"{} font-size="13" fill="{}""#,
+        Role::Mono.attributes(),
+        Theme::Light.tokens().muted
+    );
+    assert_eq!(svg.matches(&number).count(), 22, "{svg}");
     assert_eq!(svg.matches(r#"<text x="372" "#).count(), 11, "{svg}");
     assert_eq!(svg.matches(r#"<text x="348" "#).count(), 11, "{svg}");
     assert_eq!(swatches(&svg).len(), 22, "{svg}");
     let rules = format!(r#"height="1" fill="{}""#, Theme::Light.tokens().rule);
     assert_eq!(svg.matches(&rules).count(), 20 + 1);
+}
+
+#[test]
+fn only_the_stats_line_highlights_the_fastest_kilometre() {
+    let xml = ten_k();
+    for variant in OURS {
+        for theme in Theme::ALL {
+            let what = format!("{variant} {theme}");
+            let svg = svg_of(&xml, variant, theme);
+            let copies = copies(theme);
+            let accent = theme.tokens().accent;
+            // Km 7's pace in the picture only where the ledger lists every pace.
+            let listed = if variant == Variant::Ledger {
+                copies
+            } else {
+                0
+            };
+            assert_eq!(
+                picture(&svg).matches(">4:30</text>").count(),
+                listed,
+                "{what}: {svg}"
+            );
+            // Nothing in the picture is in the accent, no outline, dot or
+            // marked row, but the fastest kilometres themselves where the
+            // palette ends in it, as on dark paper.
+            let fast_end = Palette::for_theme(theme).hex(1.0);
+            let (shape, paint) = kilometre(variant);
+            for tag in painted(picture(&svg), accent) {
+                let own = tag.starts_with(&format!("<{shape} "))
+                    && tag.contains(&format!(r#" {paint}="{accent}""#));
+                assert!(fast_end == accent && own, "{what}: {tag}");
+            }
+            // The pace once at the end of the stats line in the accent, over
+            // its glowing copy on dark paper.
+            let pace = format!(
+                r#"<text x="672" y="954" text-anchor="end" {} font-size="17" fill="{accent}">4:30</text>"#,
+                Role::Strong.attributes()
+            );
+            assert_eq!(svg.matches(&pace).count(), copies, "{what}: {svg}");
+            assert_eq!(
+                svg.matches(">4:30</text>").count(),
+                copies + listed,
+                "{what}: {svg}"
+            );
+        }
+    }
 }
 
 #[test]

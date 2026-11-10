@@ -37,18 +37,6 @@ const ALL_NUMBERED: usize = 31;
 const NUMBER_EVERY: u32 = 5;
 /// The partial kilometre's bar is see-through.
 const PARTIAL_OPACITY: f32 = 0.6;
-/// The fastest bar's outline: a 2 px stroke centred 1 px inside its edge.
-const OUTLINE_INSET: f32 = 1.0;
-/// The fastest bar's pace is JetBrains Mono at 12 px, its figures 0.73 em
-/// tall, right-aligned 10 px inside the bar's right end.
-const PACE_SIZE: f32 = 12.0;
-const PACE_HEIGHT: f32 = 0.73 * PACE_SIZE;
-const PACE_INSET: f32 = 10.0;
-/// The pace's baseline below the bar's centre line, centring its figures.
-const PACE_DROP: f32 = 4.5;
-/// Thinnest bar that carries its pace: the figures plus the outline and a
-/// little paper; a thinner bar (from 32 rows) is only outlined.
-const PACE_MIN_BAR: f32 = 14.0;
 
 /// One kilometre as a rounded bar from x 88 to the right.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -71,38 +59,6 @@ pub struct Bar {
     pub label_y: Option<f32>,
 }
 
-/// The outline drawn inside the fastest kilometre's bar.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Outline {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-    pub rx: f32,
-}
-
-/// The fastest kilometre's pace, set on its bar.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Label {
-    /// E.g. `4:48`.
-    pub pace: String,
-    /// Right end, 10 px inside the bar's.
-    pub x: f32,
-    /// Baseline, 4.5 px below the bar's centre line, kept inside the zone.
-    pub y: f32,
-    /// The `text-anchor`: `end`.
-    pub anchor: &'static str,
-}
-
-/// The fastest full kilometre's bar: outlined in the marker colour, its
-/// pace inside its right end.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Fastest {
-    pub outline: Outline,
-    /// The pace inside the bar, when the bar is at least 14 px tall.
-    pub label: Option<Label>,
-}
-
 /// What `templates/ribbon.svg` draws inside the visualisation zone.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Ribbon {
@@ -110,8 +66,6 @@ pub struct Ribbon {
     pub bars: Vec<Bar>,
     /// Right end of the kilometre numbers.
     pub label_x: f32,
-    /// The fastest full kilometre's bar, if there is one.
-    pub fastest: Option<Fastest>,
 }
 
 /// Lays out the ribbon in card pixels.
@@ -119,9 +73,8 @@ pub struct Ribbon {
 /// One row per split from the top of the zone, 18 px high with 4 px gaps
 /// until the rows fill the zone, thinner beyond; rows are never stretched.
 /// A bar's length follows its palette position, the partial kilometre's too.
-/// The fastest full kilometre's bar is outlined and carries its pace.
 pub fn build(
-    analysis: &Analysis,
+    _analysis: &Analysis,
     splits: &[SplitView],
     _palette: &Palette,
     _measure: &TextMeasure,
@@ -147,29 +100,9 @@ pub fn build(
             }
         })
         .collect();
-    let fastest = analysis
-        .fastest
-        .and_then(|index| bars.iter().zip(splits).find(|(bar, _)| bar.index == index))
-        .map(|(bar, view)| Fastest {
-            outline: Outline {
-                x: bar.x + OUTLINE_INSET,
-                y: bar.y + OUTLINE_INSET,
-                width: bar.width - 2.0 * OUTLINE_INSET,
-                height: bar.height - 2.0 * OUTLINE_INSET,
-                rx: bar.rx,
-            },
-            label: (bar.height >= PACE_MIN_BAR).then(|| Label {
-                pace: view.pace.clone(),
-                x: bar.x + bar.width - PACE_INSET,
-                y: (bar.y + bar.height / 2.0 + PACE_DROP)
-                    .clamp(ZONE_TOP + PACE_HEIGHT, ZONE_TOP + ZONE_HEIGHT),
-                anchor: "end",
-            }),
-        });
     Ribbon {
         bars,
         label_x: LABEL_X,
-        fastest,
     }
 }
 
@@ -227,24 +160,6 @@ impl Ribbon {
         context! {
             bars => bars,
             label_x => px(self.label_x),
-            fastest => self.fastest.as_ref().map(|fastest| {
-                let outline = &fastest.outline;
-                context! {
-                    outline => context! {
-                        x => px(outline.x),
-                        y => px(outline.y),
-                        width => px(outline.width),
-                        height => px(outline.height),
-                        rx => px(outline.rx),
-                    },
-                    label => fastest.label.as_ref().map(|label| context! {
-                        pace => &label.pace,
-                        x => px(label.x),
-                        y => px(label.y),
-                        anchor => label.anchor,
-                    }),
-                }
-            }),
         }
     }
 }
@@ -254,7 +169,6 @@ mod tests {
     use super::*;
     use crate::card;
     use crate::model::Split;
-    use crate::text::Role;
     use crate::theme::Theme;
     use crate::variant::Variant;
     use time::macros::date;
@@ -406,62 +320,10 @@ mod tests {
     }
 
     #[test]
-    fn the_fastest_bar_gets_an_outline_inset_by_one_pixel() {
-        let (ribbon, _) = ribbon_of(&run(10));
-        let bar = &ribbon.bars[3];
-        let fastest = ribbon.fastest.expect("km 4 is the fastest");
-        assert_eq!(
-            fastest.outline,
-            Outline {
-                x: bar.x + 1.0,
-                y: bar.y + 1.0,
-                width: bar.width - 2.0,
-                height: bar.height - 2.0,
-                rx: bar.rx,
-            }
-        );
-    }
-
-    #[test]
-    fn the_fastest_bar_carries_its_pace_right_aligned_10_px_inside_its_right_end() {
-        let (ribbon, views) = ribbon_of(&run(10));
-        let bar = &ribbon.bars[3];
-        let label = ribbon
-            .fastest
-            .expect("km 4 is the fastest")
-            .label
-            .expect("18 px bars carry the pace");
-        assert_eq!(label.pace, "4:40");
-        assert_eq!(label.pace, views[3].pace);
-        assert_eq!(label.anchor, "end");
-        assert_near(label.x, bar.x + bar.width - 10.0, "right end of the pace");
-        // On the bar's centre line, the figures 0.73 em tall at 12 px.
-        assert_near(label.y, bar.y + bar.height / 2.0 + 4.5, "baseline");
-    }
-
-    #[test]
-    fn a_bar_thinner_than_14_px_keeps_its_outline_but_drops_the_pace() {
-        // 43 rows are 8.28 px each: a 12 px pace would be taller than its bar.
-        let (ribbon, _) = ribbon_of(&run_fastest_at(43, 15));
-        let fastest = ribbon.fastest.expect("km 15 is the fastest");
-        assert!(ribbon.bars[14].height < 14.0);
-        assert_eq!(fastest.label, None);
-        assert_near(
-            fastest.outline.height,
-            ribbon.bars[14].height - 2.0,
-            "outline",
-        );
-        // 24 rows are the last at 18 px, 25 rows the first thinner ones.
-        let (ribbon, _) = ribbon_of(&run_fastest_at(25, 3));
-        assert!(ribbon.bars[2].height >= 14.0);
-        assert!(ribbon.fastest.expect("km 3").label.is_some());
-    }
-
-    #[test]
-    fn without_a_full_kilometre_nothing_is_outlined_or_labelled() {
+    fn a_run_shorter_than_a_kilometre_is_one_translucent_bar() {
         let (ribbon, _) = ribbon_of(&analysis(vec![split(1, 600.0, 180.0)]));
         assert_eq!(ribbon.bars.len(), 1);
-        assert_eq!(ribbon.fastest, None);
+        assert_eq!(ribbon.bars[0].opacity, Some(0.6));
     }
 
     /// `n` full kilometres at 5:00 to 5:51, kilometre `fastest` at 4:40.
@@ -481,8 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn bars_and_the_pace_label_stay_inside_the_zone() {
-        let measure = TextMeasure::new();
+    fn bars_stay_inside_the_zone() {
         for n in [1, 10, 24, 25, 43, 150] {
             for fastest in [1, n] {
                 let what = format!("{n} rows, km {fastest} the fastest");
@@ -502,14 +363,6 @@ mod tests {
                         bar.index
                     );
                 }
-                let Some(label) = ribbon.fastest.expect("a fastest km").label else {
-                    continue;
-                };
-                let width = measure.width(Role::Mono, &label.pace, 12.0);
-                assert!(label.x - width >= 48.0 && label.x <= 672.0, "{what}");
-                let top = label.y - 0.73 * 12.0;
-                assert!(top >= 200.0 - 1e-3, "{what}: the pace from y {top}");
-                assert!(label.y <= 724.0 + 1e-3, "{what}: the pace to y {}", label.y);
             }
         }
     }
@@ -557,14 +410,5 @@ mod tests {
         assert_eq!(bar.get_attr("index").unwrap().to_string(), "2");
         assert!(bar.get_attr("opacity").unwrap().is_none());
         assert_eq!(value.get_attr("label_x").unwrap().to_string(), "76");
-        let fastest = value.get_attr("fastest").unwrap();
-        let outline = fastest.get_attr("outline").unwrap();
-        assert_eq!(outline.get_attr("x").unwrap().to_string(), "89");
-        // Km 4, the fourth row, at 200 + 3 * 20.3077 + 16.3077 / 2 + 4.5.
-        let label = fastest.get_attr("label").unwrap();
-        assert_eq!(label.get_attr("y").unwrap().to_string(), "273.58");
-        assert_eq!(label.get_attr("x").unwrap().to_string(), "662");
-        assert_eq!(label.get_attr("anchor").unwrap().as_str(), Some("end"));
-        assert_eq!(label.get_attr("pace").unwrap().as_str(), Some("4:40"));
     }
 }

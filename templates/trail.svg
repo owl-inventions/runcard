@@ -10,13 +10,5 @@
 {%- if trail.finish %}
     <rect x="{{ trail.finish.x }}" y="{{ trail.finish.y }}" width="7" height="7" fill="{{ theme.ink }}"/>
 {%- endif %}
-{#- The fastest kilometre: a paper ring in the marker colour halfway along
-    it and its pace beside the ring, haloed in paper where it crosses the
-    route. #}
-{%- if trail.fastest %}
-{%- set fastest = trail.fastest %}
-    <circle cx="{{ fastest.x }}" cy="{{ fastest.y }}" r="7" fill="{{ theme.paper }}" stroke="{{ theme.marker }}" stroke-width="2"/>
-    <text x="{{ fastest.label.x }}" y="{{ fastest.label.y }}" text-anchor="{{ fastest.label.anchor }}" {{ font.mono }} font-size="12" fill="{{ theme.marker }}" stroke="{{ theme.paper }}" stroke-width="3" stroke-linejoin="round" paint-order="stroke">{{ fastest.label.text }}</text>
-{%- endif %}
 {%- endif %}
 {% endblock %}

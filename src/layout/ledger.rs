@@ -73,14 +73,10 @@ pub struct Row {
     pub right: f32,
     /// Baseline of the figures.
     pub baseline: f32,
-    /// Pace without the unit, e.g. `5:02`, set in `ink` unless the row is
-    /// the fastest.
+    /// Pace without the unit, e.g. `5:02`, set in `ink`.
     pub pace: String,
     /// CSS colour of the kilometre, filling its swatch.
     pub color: String,
-    /// The fastest full kilometre: its number and pace in the marker colour,
-    /// the pace bold.
-    pub fastest: bool,
     /// The square in the kilometre's colour before the pace.
     pub swatch: Swatch,
     /// The partial kilometre's distance, `None` for a full one.
@@ -115,7 +111,6 @@ pub struct Ledger {
 /// of the content box with 24 px gutters between them. Rows are 36 px, less
 /// only when the longest column would not fit the zone. Every pace ends at
 /// its column's right edge, a 10 px swatch 12 px before its first figure.
-/// The fastest full kilometre's row is marked.
 pub fn build(
     analysis: &Analysis,
     splits: &[SplitView],
@@ -153,7 +148,6 @@ pub fn build(
             baseline,
             pace: view.pace.clone(),
             color: view.color.clone(),
-            fastest: analysis.fastest == Some(view.index),
             swatch: Swatch {
                 x: right - pace - SWATCH_GAP - SWATCH,
                 y: baseline - SWATCH_RISE,
@@ -200,7 +194,6 @@ impl Ledger {
                     baseline => px(row.baseline),
                     pace => &row.pace,
                     color => &row.color,
-                    fastest => row.fastest,
                     swatch => context! {
                         x => px(row.swatch.x),
                         y => px(row.swatch.y),
@@ -418,15 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn only_the_fastest_kilometre_row_is_marked() {
-        let ledger = ledger_of(&run(10, 460.0));
-        assert_eq!(ledger.rows.len(), 11);
-        for row in &ledger.rows {
-            assert_eq!(row.fastest, row.index == 4, "km {}", row.index);
-        }
-    }
-
-    #[test]
     fn the_partial_kilometre_row_notes_its_distance_after_its_number() {
         let ledger = ledger_of(&run(10, 460.0));
         let partial = &ledger.rows[10];
@@ -480,7 +464,8 @@ mod tests {
     }
 
     #[test]
-    fn the_template_sets_the_paces_in_ink_or_marker_and_only_the_swatch_in_the_kilometre_colour() {
+    fn the_template_sets_every_number_muted_every_pace_in_ink_and_only_the_swatch_in_the_kilometre_colour(
+    ) {
         let template = include_str!("../../templates/ledger.svg");
         let line_of = |text: &str| {
             template
@@ -489,12 +474,12 @@ mod tests {
                 .unwrap_or_else(|| panic!("{text} in {template}"))
         };
         let pace = line_of("{{ row.pace }}");
-        let fill = r#"fill="{{ theme.marker if row.fastest else theme.ink }}""#;
-        assert!(pace.contains(fill), "{pace}");
-        assert!(pace.contains("{% if row.fastest %}"), "{pace}");
+        let style = r#"{{ font.mono }} font-size="13" fill="{{ theme.ink }}""#;
+        assert!(pace.contains(style), "{pace}");
         let number = line_of("{{ row.index }}");
-        let fill = r#"fill="{{ theme.marker if row.fastest else theme.muted }}""#;
-        assert!(number.contains(fill), "{number}");
+        let style = r#"{{ font.mono }} font-size="13" fill="{{ theme.muted }}""#;
+        assert!(number.contains(style), "{number}");
+        assert!(!template.contains("row.fastest"), "{template}");
         let swatch = template
             .lines()
             .find(|line| line.contains(r#"width="10" height="10" rx="3""#))
@@ -510,7 +495,7 @@ mod tests {
         assert_eq!(ledger.rows.len(), 1);
         assert!(ledger.rules.is_empty());
         let row = &ledger.rows[0];
-        assert_eq!((row.pace.as_str(), row.fastest), ("5:00", false));
+        assert_eq!(row.pace, "5:00");
         assert_near(row.right, 672.0, "right edge");
     }
 
@@ -528,13 +513,6 @@ mod tests {
         assert!(decimals <= 2, "baseline {baseline}");
         assert_eq!(row.get_attr("x").unwrap().to_string(), "48");
         assert_eq!(row.get_attr("right").unwrap().to_string(), "186");
-        assert!(!row.get_attr("fastest").unwrap().is_true());
-        let fourth = value
-            .get_attr("rows")
-            .unwrap()
-            .get_item(&Value::from(3))
-            .unwrap();
-        assert!(fourth.get_attr("fastest").unwrap().is_true());
         assert_eq!(row.get_attr("index").unwrap().to_string(), "1");
         assert!(row.get_attr("note").unwrap().is_none());
         let swatch = row.get_attr("swatch").unwrap();

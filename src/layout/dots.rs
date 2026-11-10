@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::model::{Analysis, Meta, SplitView};
 use crate::palette::Palette;
 use crate::render::px;
-use crate::text::{Role, TextMeasure};
+use crate::text::TextMeasure;
 
 /// The visualisation zone, x 48 to 672 and y 200 to 724.
 const ZONE_X: f32 = 48.0;
@@ -29,16 +29,6 @@ const LABEL_INSET: f32 = 4.0;
 /// Height of the figures of JetBrains Mono at 11 px (cap height 0.73 em):
 /// the baseline lies this far below the top of the number.
 const LABEL_FIGURE_HEIGHT: f32 = 8.0;
-/// Paper between the fastest dot and its ring.
-const RING_CLEARANCE: f32 = 5.0;
-/// The pace of the fastest kilometre: Mono at 12 px, centred under its
-/// ring with the baseline 16 px below it; above the ring the figures keep
-/// the same paper to it.
-const LABEL_SIZE: f32 = 12.0;
-const LABEL_BELOW: f32 = 16.0;
-const LABEL_ABOVE: f32 = LABEL_BELOW - FIGURE_HEIGHT;
-/// Height of the figures of JetBrains Mono at 12 px (cap height 0.73 em).
-const FIGURE_HEIGHT: f32 = 8.76;
 
 /// One kilometre of the grid.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -57,51 +47,21 @@ pub struct Dot {
     pub label: Option<(f32, f32)>,
 }
 
-/// A circle drawn as an outline.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub struct Ring {
-    pub x: f32,
-    pub y: f32,
-    pub r: f32,
-}
-
-/// A text placed by its anchor on the baseline.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Label {
-    pub x: f32,
-    /// The baseline.
-    pub y: f32,
-    /// The SVG `text-anchor`, always `middle`.
-    pub anchor: &'static str,
-    pub text: String,
-}
-
-/// The fastest full kilometre: a ring around its dot and its pace.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Callout {
-    pub ring: Ring,
-    /// The pace, e.g. `4:48`.
-    pub label: Label,
-}
-
 /// What `templates/dots.svg` draws inside the visualisation zone.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Dots {
     /// One dot per split, row by row from the top left.
     pub dots: Vec<Dot>,
-    /// The ring around the fastest full kilometre and its pace.
-    pub fastest: Option<Callout>,
 }
 
 /// Lays out the dots in card pixels: one per split in a grid of square
 /// cells centred in the zone, each dot centred in its cell, sized by its
-/// pace and numbered in the corner, the fastest ringed and its pace set
-/// under it.
+/// pace and numbered in the corner.
 pub fn build(
-    analysis: &Analysis,
+    _analysis: &Analysis,
     splits: &[SplitView],
     _palette: &Palette,
-    measure: &TextMeasure,
+    _measure: &TextMeasure,
     _meta: &Meta,
 ) -> Dots {
     let grid = grid(splits.len());
@@ -123,43 +83,7 @@ pub fn build(
             }
         })
         .collect();
-    let fastest = analysis
-        .fastest
-        .and_then(|index| dots.iter().zip(splits).find(|(d, _)| d.index == index))
-        .map(|(dot, view)| {
-            let ring = Ring {
-                x: dot.x,
-                y: dot.y,
-                r: dot.r + RING_CLEARANCE,
-            };
-            let width = measure.width(Role::Mono, &view.pace, LABEL_SIZE);
-            Callout {
-                ring,
-                label: label(ring, view.pace.clone(), width),
-            }
-        });
-    Dots { dots, fastest }
-}
-
-/// The pace `text`, `width` px wide, centred under the `ring`, or above it
-/// where under it the pace would leave the zone at the bottom, which only
-/// the last row of a grid as tall as the zone does; the row above is inside.
-/// A pace that would cross a side of the zone is moved along its baseline
-/// until it ends on that side.
-fn label(ring: Ring, text: String, width: f32) -> Label {
-    let below = ring.y + ring.r + LABEL_BELOW;
-    let y = if below <= ZONE_Y + ZONE_H {
-        below
-    } else {
-        ring.y - ring.r - LABEL_ABOVE
-    };
-    let left = ring.x - width / 2.0;
-    Label {
-        x: ring.x + left.clamp(ZONE_X, ZONE_X + ZONE_W - width) - left,
-        y,
-        anchor: "middle",
-        text,
-    }
+    Dots { dots }
 }
 
 /// The cells of the grid.
@@ -231,23 +155,7 @@ impl Dots {
                 }
             })
             .collect();
-        context! {
-            dots => dots,
-            fastest => self.fastest.as_ref().map(|callout| {
-                let (ring, label) = (callout.ring, &callout.label);
-                context! {
-                    x => px(ring.x),
-                    y => px(ring.y),
-                    r => px(ring.r),
-                    label => context! {
-                        x => px(label.x),
-                        y => px(label.y),
-                        anchor => label.anchor,
-                        text => &label.text,
-                    },
-                }
-            }),
-        }
+        context! { dots => dots }
     }
 }
 
@@ -255,7 +163,6 @@ impl Dots {
 mod tests {
     use super::*;
     use crate::model::Split;
-    use crate::text::Role;
     use crate::theme::Theme;
 
     fn assert_near(actual: f32, expected: f32, what: &str) {
@@ -346,7 +253,7 @@ mod tests {
         }
     }
 
-    fn analysis(views: &[SplitView], fastest: Option<u32>) -> Analysis {
+    fn analysis(views: &[SplitView]) -> Analysis {
         let splits: Vec<Split> = views
             .iter()
             .map(|v| Split {
@@ -360,7 +267,7 @@ mod tests {
             distance_m: splits.iter().map(|s| s.distance_m).sum(),
             elapsed_s: splits.iter().map(|s| s.seconds).sum(),
             splits,
-            fastest,
+            fastest: None,
             start: None,
             points: Vec::new(),
         }
@@ -375,9 +282,9 @@ mod tests {
         }
     }
 
-    fn dots_of(views: &[SplitView], fastest: Option<u32>) -> Dots {
+    fn dots_of(views: &[SplitView]) -> Dots {
         build(
-            &analysis(views, fastest),
+            &analysis(views),
             views,
             &Palette::for_theme(Theme::Light),
             &TextMeasure::new(),
@@ -397,7 +304,7 @@ mod tests {
     #[test]
     fn every_split_gets_a_dot_in_its_colour_in_its_cell_row_by_row() {
         let views = half();
-        let dots = dots_of(&views, Some(21));
+        let dots = dots_of(&views);
         let grid = grid(22);
         assert_eq!(dots.dots.len(), 22);
         for (i, (dot, view)) in dots.dots.iter().zip(&views).enumerate() {
@@ -416,7 +323,7 @@ mod tests {
 
     #[test]
     fn the_kilometre_number_sits_4_px_inside_the_top_left_corner_of_its_cell() {
-        let dots = dots_of(&half(), None);
+        let dots = dots_of(&half());
         let grid = grid(22);
         for (i, dot) in dots.dots.iter().enumerate() {
             let (col, row) = ((i % 7) as f32, (i / 7) as f32);
@@ -430,7 +337,7 @@ mod tests {
     #[test]
     fn a_small_grid_numbers_every_fifth_kilometre_and_the_last() {
         let views: Vec<SplitView> = (1..=103).map(|i| view(i, 1.0, 0.5)).collect();
-        let dots = dots_of(&views, None);
+        let dots = dots_of(&views);
         assert!(grid(103).cell < 56.0);
         let shown: Vec<u32> = dots
             .dots
@@ -444,107 +351,13 @@ mod tests {
     }
 
     #[test]
-    fn the_fastest_kilometre_gets_a_ring_5_px_outside_its_dot_and_its_pace_under_it() {
-        let mut views = half();
-        views[20].pace = "4:48".into();
-        let dots = dots_of(&views, Some(21));
-        let fastest = &dots.dots[20];
-        let callout = dots.fastest.expect("a callout");
-        let ring = callout.ring;
-        assert_eq!((ring.x, ring.y), (fastest.x, fastest.y));
-        assert_near(ring.r, fastest.r + 5.0, "ring radius");
-        let width = TextMeasure::new().width(Role::Mono, "4:48", 12.0);
-        assert_eq!(callout.label, label(ring, "4:48".into(), width));
-        assert_eq!(callout.label.text, "4:48");
-        assert_eq!(dots_of(&half(), None).fastest, None);
-    }
-
-    // ----- the callout -----
-
-    fn assert_label(label: &Label, x: f32, y: f32) {
-        assert!(
-            (label.x - x).abs() < 1e-3 && (label.y - y).abs() < 1e-3 && label.anchor == "middle",
-            "{label:?}, expected {x} {y} middle"
-        );
-    }
-
-    #[test]
-    fn the_pace_is_centred_under_the_ring_its_baseline_16_px_below_it() {
-        let ring = Ring {
-            x: 300.0,
-            y: 400.0,
-            r: 30.0,
-        };
-        let label = label(ring, "4:48".into(), 29.0);
-        assert_label(&label, 300.0, 446.0);
-        assert_eq!(label.text, "4:48");
-    }
-
-    #[test]
-    fn a_pace_that_would_leave_the_zone_at_the_bottom_goes_above_the_ring() {
-        // Under it the baseline would be at 736: above it, the figures as
-        // far from the ring as they would be under it.
-        let ring = Ring {
-            x: 300.0,
-            y: 690.0,
-            r: 30.0,
-        };
-        assert_label(
-            &label(ring, "4:48".into(), 29.0),
-            300.0,
-            690.0 - 30.0 - 7.24,
-        );
-    }
-
-    #[test]
-    fn a_pace_that_would_leave_the_zone_at_a_side_ends_on_its_edge() {
-        let at = |x: f32| Ring {
-            x,
-            y: 400.0,
-            r: 10.0,
-        };
-        assert_label(&label(at(60.0), "4:48".into(), 40.0), 68.0, 426.0);
-        assert_label(&label(at(665.0), "4:48".into(), 40.0), 652.0, 426.0);
-    }
-
-    #[test]
-    fn every_pace_stays_inside_the_zone_wherever_the_fastest_kilometre_is() {
-        let width = TextMeasure::new().width(Role::Mono, "10:48", 12.0);
+    fn every_dot_stays_inside_its_cell_and_the_zone() {
         for n in [1, 10, 21, 43, 49, 50, 60, 110] {
             let views: Vec<SplitView> = (1..=n).map(|i| view(i, 1.0, 1.0)).collect();
-            for dot in dots_of(&views, None).dots {
-                let ring = Ring {
-                    x: dot.x,
-                    y: dot.y,
-                    r: dot.r + 5.0,
-                };
-                let label = label(ring, "10:48".into(), width);
-                let left = label.x - width / 2.0;
-                assert!(left >= 48.0 && left + width <= 672.0, "{n}: {label:?}");
-                // The figures are 8.76 px tall at 12 px.
-                assert!(
-                    label.y - 8.76 >= 200.0 && label.y <= 724.0,
-                    "{n}: {label:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn every_dot_and_ring_stays_inside_its_cell_and_the_zone() {
-        for n in [1, 10, 21, 43, 49, 50, 60, 110] {
-            let views: Vec<SplitView> = (1..=n).map(|i| view(i, 1.0, 1.0)).collect();
-            let dots = dots_of(&views, Some(n));
-            let ring = dots.fastest.unwrap().ring;
             let cell = grid(n as usize).cell;
-            // Clear of the largest dot in the next cell.
-            let neighbour = radius(cell, 1.0);
-            assert!(
-                ring.r + 0.75 + neighbour < cell,
-                "{n}: ring {} in cell {cell}",
-                ring.r
-            );
-            for dot in &dots.dots {
+            for dot in &dots_of(&views).dots {
+                // Centred in its cell, the largest dot leaves paper around it.
+                assert!(dot.r < cell / 2.0, "{n}: dot {} in cell {cell}", dot.r);
                 assert!(dot.x - dot.r >= 48.0 && dot.x + dot.r <= 672.0, "{n}");
                 assert!(dot.y - dot.r >= 200.0 && dot.y + dot.r <= 724.0, "{n}");
             }
@@ -553,9 +366,7 @@ mod tests {
 
     #[test]
     fn without_splits_there_are_no_dots() {
-        let dots = dots_of(&[], None);
-        assert!(dots.dots.is_empty());
-        assert_eq!(dots.fastest, None);
+        assert!(dots_of(&[]).dots.is_empty());
     }
 
     #[test]
@@ -570,19 +381,6 @@ mod tests {
                 partial: true,
                 label: Some((52.333_33, 172.666_66)),
             }],
-            fastest: Some(Callout {
-                ring: Ring {
-                    x: 1.234_5,
-                    y: 2.345_6,
-                    r: 35.0,
-                },
-                label: Label {
-                    x: 1.234_5,
-                    y: 53.345_6,
-                    anchor: "middle",
-                    text: "4:48".into(),
-                },
-            }),
         };
         let value = dots.to_value();
         let dot = value
@@ -604,19 +402,11 @@ mod tests {
         assert!(dot.get_attr("partial").unwrap().is_true());
         assert_eq!(get(&dot, "label.x"), "52.33");
         assert_eq!(get(&dot, "label.y"), "172.67");
-        assert_eq!(get(&value, "fastest.x"), "1.23");
-        assert_eq!(get(&value, "fastest.y"), "2.35");
-        assert_eq!(get(&value, "fastest.r"), "35");
-        assert_eq!(get(&value, "fastest.label.x"), "1.23");
-        assert_eq!(get(&value, "fastest.label.y"), "53.35");
-        assert_eq!(get(&value, "fastest.label.anchor"), "middle");
-        assert_eq!(get(&value, "fastest.label.text"), "4:48");
         let unlabelled = Dots {
             dots: vec![Dot {
                 label: None,
                 ..dots.dots[0].clone()
             }],
-            fastest: None,
         }
         .to_value();
         let dot = unlabelled
@@ -625,6 +415,5 @@ mod tests {
             .get_item(&Value::from(0))
             .unwrap();
         assert!(dot.get_attr("label").unwrap().is_none());
-        assert!(unlabelled.get_attr("fastest").unwrap().is_none());
     }
 }

@@ -7,10 +7,10 @@ italic, the runner's name as an italic byline under it, then the city and date
 in tracked capitals. Each kilometre is coloured by its pace on a scale from
 deep violet for the slowest to warm yellow (coral on dark paper) for the
 fastest, and drawn as one of six pictures: a spiral, bars, the route, dots, a
-curve or a table. The fastest kilometre is highlighted twice: marked and
-labelled in the picture, and set in the accent colour at the end of the stats
-line, after the distance and the average pace. Light or dark paper. The GPX
-file needs timestamps, since the paces are worked out from them.
+curve or a table. The fastest kilometre is set in the accent colour at the
+end of the stats line, after the distance and the average pace. Light or dark
+paper. The GPX file needs timestamps, since the paces are worked out from
+them.
 
 <img src="examples/sample.png" alt="Sample card rendered from examples/sample.gpx" width="360">
 
@@ -45,8 +45,7 @@ runcard examples/sample.gpx --runner "Mara Lindqvist" --city Lisbon
 
 Six pictures of the same splits, chosen with `--variant` or the `variant`
 part, each in the same frame and on either theme. All are rendered from
-`examples/sample.gpx`. The fastest kilometre is marked and labelled with its
-pace in every picture. Every variant but `trail`, whose picture is the route,
+`examples/sample.gpx`. Every variant but `trail`, whose picture is the route,
 also shows the course in miniature right of the legend, so each run stays
 recognisable.
 

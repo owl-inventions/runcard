@@ -7,15 +7,5 @@
     <text x="{{ ribbon.label_x }}" y="{{ bar.label_y }}" text-anchor="end" {{ font.mono }} font-size="11" fill="{{ theme.muted }}">{{ bar.index }}</text>
 {%- endif %}
 {%- endfor %}
-{#- The fastest bar: outlined in the marker colour, its pace on its right end
-    when the bar is tall enough to hold it. #}
-{%- if ribbon.fastest %}
-{%- set outline = ribbon.fastest.outline %}
-    <rect x="{{ outline.x }}" y="{{ outline.y }}" width="{{ outline.width }}" height="{{ outline.height }}" rx="{{ outline.rx }}" fill="none" stroke="{{ theme.marker }}" stroke-width="2"/>
-{%- if ribbon.fastest.label %}
-{%- set label = ribbon.fastest.label %}
-    <text x="{{ label.x }}" y="{{ label.y }}" text-anchor="{{ label.anchor }}" {{ font.mono }} font-size="12" fill="{{ theme.on_fast }}">{{ label.pace }}</text>
-{%- endif %}
-{%- endif %}
 {%- endif %}
 {% endblock %}
